@@ -1,0 +1,8 @@
+config.py
+venv/
+__pycache__/
+*.db
+data/
+*.log
+*.xlsx
+.claude/
