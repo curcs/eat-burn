@@ -44,7 +44,7 @@ def n(x: float) -> str:
 
 def left_line(st: Storage, day: date) -> str:
     left = remaining(st, day)
-    return f"Осталось {n(left)} ккал" if left >= 0 else f"Перебор {n(-left)} ккал"
+    return f"осталось {n(left)} ккал" if left >= 0 else f"перебор {n(-left)} ккал"
 
 
 def format_draft(d: Draft, st: Storage, day: date) -> str:
@@ -55,13 +55,13 @@ def format_draft(d: Draft, st: Storage, day: date) -> str:
         else:
             lines.append(f"• {esc(i.name)} {n(i.grams)} г · ❓")
     total = d.total()
-    pfc = f"Б {n(d.total('protein'))} · Ж {n(d.total('fat'))} · У {n(d.total('carbs'))}"
+    pfc = f"бжу {n(d.total('protein'))}/{n(d.total('fat'))}/{n(d.total('carbs'))}"
     after = remaining(st, day) - total
     tail = f"останется {n(after)}" if after >= 0 else f"перебор {n(-after)}"
-    return "\n".join(lines) + f"\n\n<b>Итого {n(total)} ккал</b> · {pfc}\nПосле этого {tail}"
+    return "\n".join(lines) + f"\n\n<b>итого {n(total)} ккал</b> · {pfc}\nпосле этого {tail}"
 
 
-def format_day(st: Storage, day: date, title: str = "Сегодня") -> str:
+def format_day(st: Storage, day: date, title: str = "сегодня") -> str:
     t = st.day_totals(day)
     g = goal(st, day)
     rows = []
@@ -70,8 +70,8 @@ def format_day(st: Storage, day: date, title: str = "Сегодня") -> str:
         rows.append(f"{e['ts'][11:16]}  {sign}{n(e['kcal'])}  {esc(e['descr'])}")
     body = "\n".join(rows) or "пока пусто"
     return (f"<b>{title}</b>\n{body}\n\n"
-            f"Съедено {n(t['eaten'])} · тренировки +{n(t['burned'])} · норма {n(g)}\n"
-            f"Б {n(t['protein'])} · Ж {n(t['fat'])} · У {n(t['carbs'])}\n"
+            f"съедено {n(t['eaten'])} · тренировки +{n(t['burned'])} · норма {n(g)}\n"
+            f"бжу {n(t['protein'])}/{n(t['fat'])}/{n(t['carbs'])}\n"
             f"<b>{left_line(st, day)}</b>")
 
 
@@ -82,7 +82,7 @@ def format_week(st: Storage, end: date) -> str:
         d = start + timedelta(days=k)
         t = st.day_totals(d)
         if not t["n"]:
-            lines.append(f"{WEEKDAYS[d.weekday()]} {d:%d.%m}  —")
+            lines.append(f"{WEEKDAYS[d.weekday()]} {d:%d.%m}  ·")
             continue
         left = remaining(st, d)
         mark = "✅" if left >= 0 else "🔺"
@@ -90,16 +90,16 @@ def format_week(st: Storage, end: date) -> str:
         lines.append(f"{WEEKDAYS[d.weekday()]} {d:%d.%m}  {n(t['eaten'])}{burn}  {mark} {n(left)}")
         if t["eaten"]:
             eaten_days.append(t["eaten"])
-    text = f"<b>Неделя {start:%d.%m}–{end:%d.%m}</b>\n<pre>" + "\n".join(lines) + "</pre>"
+    text = f"<b>неделя {start:%d.%m}-{end:%d.%m}</b>\n<pre>" + "\n".join(lines) + "</pre>"
     if eaten_days:
         avg = sum(eaten_days) / len(eaten_days)
-        text += f"\nВ среднем {n(avg)} ккал в день при норме {n(goal(st, end))}"
+        text += f"\nв среднем {n(avg)} ккал в день при норме {n(goal(st, end))}"
         if avg < LOW_AVG_KCAL:
-            text += (f"\n\n💛 Средняя ниже {LOW_AVG_KCAL} — это уже жёсткий дефицит. "
-                     "Если так неделями, стоит добавить немного еды.")
+            text += (f"\n\n💛 средняя ниже {LOW_AVG_KCAL}, это уже жёсткий дефицит. "
+                     "если так неделями, стоит добавить немного еды")
     w = st.weights()
     if len(w) >= 2:
-        text += f"\nВес: {w[0]['kg']} → {w[-1]['kg']} кг"
+        text += f"\nвес: {w[0]['kg']} → {w[-1]['kg']} кг"
     return text
 
 

@@ -116,10 +116,10 @@ def test_day_remaining_with_workout(st, tmp_path):
                  [{"name": "банан", "grams": 120, "kcal": 107}], when=at)
     assert report.goal(st, day) == 1350
     assert report.remaining(st, day) == 1350 - 1207 + 200
-    assert "Осталось 343" in report.format_day(st, day)
+    assert "осталось 343" in report.format_day(st, day)
 
     st.set("goal_manual", 1000)
-    assert report.left_line(st, day) == "Перебор 7 ккал"
+    assert report.left_line(st, day) == "перебор 7 ккал"
 
     st.add_weight(57.5, day)
     wb = load_workbook(report.build_xlsx(st, tmp_path / "x.xlsx"))
@@ -132,7 +132,7 @@ def test_week_low_average_note(st):
     for d in range(1, 8):
         st.add_entry("quick", "рацион", 1100, "manual", when=datetime(2026, 10, d, 12))
     text = report.format_week(st, date(2026, 10, 7))
-    assert "В среднем 1 100" in text and "ниже 1200" in text
+    assert "в среднем 1 100" in text and "ниже 1200" in text
 
 
 def test_dishes(st):

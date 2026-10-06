@@ -45,27 +45,28 @@ for key in ("height_cm", "birth_year", "start_weight", "sex"):
     if st.get(key) is None and hasattr(config, key.upper()):
         st.set(key, getattr(config, key.upper()))
 
-HELP = """Пиши, что съела или сожгла:
+HELP = """пиши, что съела или сожгла:
 
-<code>450 рацион обед</code> — ккал числом, запишу сразу
-<code>-200 бег</code> — тренировка, вернёт ккал в остаток
-<code>овсянка 60г, банан, ложка мёда</code> — посчитаю по базе и спрошу ✅
-📷 фото тарелки — то же, подпись к фото поможет («гречка 200г»)
+<code>450 рацион обед</code>: ккал числом, запишу сразу
+<code>-200 бег</code>: тренировка, верну ккал в остаток
+<code>овсянка 60г, банан, ложка мёда</code>: посчитаю по базе и спрошу ✅
+📷 фото тарелки: то же самое, подпись к фото поможет («гречка 200г»)
 
-Граммы пиши с «г»: <code>творог 150г</code>. Просто <code>150 творог</code> — это 150 ккал.
+граммы пиши с «г»: <code>творог 150г</code>. просто <code>150 творог</code> я пойму как 150 ккал
 
-/today — сегодня и остаток
-/week — неделя по дням
-/undo — удалить последнюю запись
-/weight 57.5 — записать вес, норма пересчитается
-/goal 1300 — своя норма (/goal auto — снова по формуле)
-/food чак-чак 450 — ккал на 100 г в мой справочник
-/dishes — мои блюда: <code>450 цезарь жан-жак</code> запоминается, потом хватит <code>цезарь жан-жак</code>
-/file — табличка"""
+/today: сегодня и остаток
+/week: неделя по дням
+/undo: удалить последнюю запись
+/weight 57.5: записать вес, норма пересчитается
+/goal 1300: своя норма (/goal auto вернёт расчёт по формуле)
+/food чак-чак 450: ккал на 100 г в мой справочник
+/dishes: мои блюда. <code>450 цезарь жан-жак</code> запоминается, потом хватит <code>цезарь жан-жак</code>
+/file: табличка"""
+
 
 KEYBOARD = InlineKeyboardMarkup([[
-    InlineKeyboardButton("✅ Записать", callback_data="ok"),
-    InlineKeyboardButton("✏️ Править", callback_data="edit"),
+    InlineKeyboardButton("✅ записать", callback_data="ok"),
+    InlineKeyboardButton("✏️ поправить", callback_data="edit"),
     InlineKeyboardButton("❌", callback_data="no"),
 ]])
 
@@ -90,8 +91,8 @@ async def show_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: 
     missing = draft.missing()
     if missing:
         ud["awaiting"] = "per100"
-        await reply(update, f"Не нашла «{report.esc(missing[0].name)}». Сколько в нём ккал на 100 г? "
-                            "Напиши число — запомню.")
+        await reply(update, f"не нашла «{report.esc(missing[0].name)}». сколько в нём ккал на 100 г? "
+                            "напиши число, я запомню")
         return
     ud["awaiting"] = None
     msg = await reply(update, report.format_draft(draft, st, date.today()), reply_markup=KEYBOARD)
@@ -104,7 +105,7 @@ async def parse_and_show(update, context, fn, *args):
         draft = await asyncio.to_thread(fn, *args)
     except LLMError as e:
         log.warning("llm: %s", e)
-        await reply(update, "Модель сейчас не справилась 😕 Напиши ккал числом: <code>350 овсянка</code>")
+        await reply(update, "модель сейчас не справилась 😕 напиши ккал числом: <code>350 овсянка</code>")
         return
     await asyncio.to_thread(nutr.fill, draft)
     await show_draft(update, context, draft)
@@ -151,7 +152,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     draft: Draft | None = ud.get("draft")
     if draft is None or q.message.message_id != ud.get("draft_msg"):
-        await q.answer("Этот черновик уже неактуален")
+        await q.answer("этот черновик уже неактуален")
         await q.edit_message_reply_markup(None)
         return
     await q.answer()
@@ -161,17 +162,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      draft.total("protein"), draft.total("fat"), draft.total("carbs"),
                      [i.as_row() for i in draft.items])
         ud.pop("draft"), ud.pop("draft_msg")
-        await q.edit_message_text(q.message.text_html + f"\n\n👌 Записала. <b>{report.left_line(st, date.today())}</b>",
+        await q.edit_message_text(q.message.text_html + f"\n\n👌 записала. <b>{report.left_line(st, date.today())}</b>",
                                   parse_mode=ParseMode.HTML)
     elif q.data == "edit":
         ud["awaiting"] = "edit"
         await q.edit_message_reply_markup(None)
-        await reply(update, "Напиши, что поменять, можно своими словами:\n"
+        await reply(update, "напиши, что поменять, можно своими словами:\n"
                             "<code>банан 150</code> · <code>-мёд</code> · <code>добавь сыр 30г</code>\n"
                             "<code>там 14 ккал на 100 мл, выпила 25 г</code>")
     elif q.data == "no":
         ud.pop("draft"), ud.pop("draft_msg")
-        await q.edit_message_text(q.message.text_html + "\n\n❌ Не записала", parse_mode=ParseMode.HTML)
+        await q.edit_message_text(q.message.text_html + "\n\n❌ не записала", parse_mode=ParseMode.HTML)
 
 
 # --- блюда на порцию: «450 цезарь жан-жак» запоминается, потом хватает «цезарь жан-жак» ---
@@ -184,7 +185,7 @@ async def show_dish(update: Update, context: ContextTypes.DEFAULT_TYPE, dish):
     after = report.remaining(st, date.today()) - dish["kcal"]
     tail = f"останется {report.n(after)}" if after >= 0 else f"перебор {report.n(-after)}"
     msg = await reply(update, f"{report.esc(dish['name'])} · <b>{report.n(dish['kcal'])} ккал</b>, как в прошлый раз\n"
-                              f"После этого {tail}\n\nДругая цифра? Просто пришли число.",
+                              f"после этого {tail}\n\nдругая цифра? просто пришли число",
                       reply_markup=KEYBOARD)
     ud["draft_msg"] = msg.message_id
 
@@ -197,7 +198,7 @@ def record_dish(context: ContextTypes.DEFAULT_TYPE, kcal: float) -> str:
     st.add_entry("quick", dish["name"], kcal, "manual")
     if kcal != dish["kcal"]:
         st.put_dish(dish["name"], kcal)
-    return f"👌 Записала {report.esc(dish['name'])} {report.n(kcal)} ккал. <b>{report.left_line(st, date.today())}</b>"
+    return f"👌 записала {report.esc(dish['name'])} {report.n(kcal)} ккал. <b>{report.left_line(st, date.today())}</b>"
 
 
 async def on_dish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -208,11 +209,11 @@ async def on_dish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(record_dish(context, ud["dish"]["kcal"]), parse_mode=ParseMode.HTML)
     elif q.data == "edit":
         await q.edit_message_reply_markup(None)
-        await reply(update, "Сколько ккал в этот раз? Пришли число.")
+        await reply(update, "сколько ккал в этот раз? пришли число")
     elif q.data == "no":
         ud.pop("dish"), ud.pop("draft_msg")
         ud["awaiting"] = None
-        await q.edit_message_text(q.message.text_html + "\n\n❌ Не записала", parse_mode=ParseMode.HTML)
+        await q.edit_message_text(q.message.text_html + "\n\n❌ не записала", parse_mode=ParseMode.HTML)
 
 
 # --- сообщения ---
@@ -250,8 +251,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 draft = await asyncio.to_thread(llm.edit, draft, text)
             except LLMError as e:
                 log.warning("llm edit: %s", e)
-                await reply(update, "Не поняла правку 😕 Попробуй так: <code>сироп 25</code>, "
-                                    "а калорийность — <code>/food л-карнитин сироп 14</code>")
+                await reply(update, "не поняла правку 😕 попробуй так: <code>сироп 25</code>, "
+                                    "а калорийность отдельно: <code>/food л-карнитин сироп 14</code>")
                 return
             for item in draft.items:  # названную калорийность запоминаем на будущее
                 if item.per100 and item.per100.match == "со слов":
@@ -265,10 +266,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if quick and quick.kind == "ambiguous":
         ud["awaiting"] = None
         ud["amb"] = {"kcal": quick.kcal, "desc": quick.desc, "text": text}
-        await reply(update, f"«{report.esc(text)}» — это {quick.kcal} ккал или {quick.kcal} шт?",
+        await reply(update, f"«{report.esc(text)}»: это {quick.kcal} ккал или {quick.kcal} шт?",
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton(f"{quick.kcal} ккал", callback_data="amb_kcal"),
-                        InlineKeyboardButton(f"{quick.kcal} шт — посчитать", callback_data="amb_count")]]))
+                        InlineKeyboardButton(f"{quick.kcal} шт, посчитать", callback_data="amb_count")]]))
         return
     if quick:
         ud["awaiting"] = None
@@ -298,7 +299,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await reply(update, f"Норма сейчас {report.goal(st)} ккал в день.\n\n" + HELP)
+    await reply(update, f"норма сейчас {report.goal(st)} ккал в день\n\n" + HELP)
 
 
 @owner_only
@@ -315,9 +316,9 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = st.delete_last()
     if not row:
-        await reply(update, "Удалять нечего")
+        await reply(update, "удалять нечего")
         return
-    await reply(update, f"Удалила: {row['day']} {report.esc(row['descr'])} ({round(row['kcal'])} ккал)\n"
+    await reply(update, f"удалила: {row['day']} {report.esc(row['descr'])} ({round(row['kcal'])} ккал)\n"
                         f"{report.left_line(st, date.today())}")
 
 
@@ -327,11 +328,11 @@ async def cmd_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kg = float(context.args[0].replace(",", "."))
     except (IndexError, ValueError):
         w = st.last_weight()
-        await reply(update, f"Напиши так: <code>/weight 57.5</code>" + (f"\nПоследний вес {w} кг" if w else ""))
+        await reply(update, f"напиши так: <code>/weight 57.5</code>" + (f"\nпоследний вес {w} кг" if w else ""))
         return
     st.add_weight(kg)
-    note = " (своя норма, /goal auto — пересчитать по весу)" if st.get("goal_manual") else ""
-    await reply(update, f"Записала {kg} кг. Норма {report.goal(st)} ккал{note}")
+    note = " (это своя норма, /goal auto пересчитает по весу)" if st.get("goal_manual") else ""
+    await reply(update, f"записала {kg} кг. норма {report.goal(st)} ккал{note}")
 
 
 @owner_only
@@ -342,39 +343,39 @@ async def cmd_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif arg.isdigit():
         st.set("goal_manual", int(arg))
     else:
-        await reply(update, f"Норма {report.goal(st)} ккал. Поменять: <code>/goal 1300</code> или <code>/goal auto</code>")
+        await reply(update, f"норма {report.goal(st)} ккал. поменять: <code>/goal 1300</code> или <code>/goal auto</code>")
         return
-    await reply(update, f"Норма {report.goal(st)} ккал. {report.left_line(st, date.today())}")
+    await reply(update, f"норма {report.goal(st)} ккал. {report.left_line(st, date.today())}")
 
 
 @owner_only
 async def cmd_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m = re.match(r"^(.+?)\s+(\d+(?:[.,]\d+)?)$", " ".join(context.args))
     if not m:
-        await reply(update, "Напиши так: <code>/food чак-чак 450</code> (ккал на 100 г)")
+        await reply(update, "напиши так: <code>/food чак-чак 450</code> (ккал на 100 г)")
         return
     st.put_food(m.group(1), float(m.group(2).replace(",", ".")))
-    await reply(update, f"Запомнила: {report.esc(m.group(1).lower())} — {m.group(2)} ккал на 100 г")
+    await reply(update, f"запомнила: {report.esc(m.group(1).lower())}, {m.group(2)} ккал на 100 г")
 
 
 @owner_only
 async def cmd_dishes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = st.dishes()
     if not rows:
-        await reply(update, "Пока пусто. Блюда запоминаются, когда пишешь с цифрой: <code>450 цезарь жан-жак</code>")
+        await reply(update, "пока пусто. блюда запоминаются, когда пишешь с цифрой: <code>450 цезарь жан-жак</code>")
         return
-    await reply(update, "<b>Мои блюда</b> (ккал на порцию)\n" +
+    await reply(update, "<b>мои блюда</b> (ккал на порцию)\n" +
                 "\n".join(f"{report.n(r['kcal'])}  {report.esc(r['name'])}" for r in rows) +
-                "\n\nУдалить: <code>/dish_del название</code>")
+                "\n\nудалить: <code>/dish_del название</code>")
 
 
 @owner_only
 async def cmd_dish_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = " ".join(context.args)
     if name and st.delete_dish(name):
-        await reply(update, f"Удалила «{report.esc(name)}»")
+        await reply(update, f"удалила «{report.esc(name)}»")
     else:
-        await reply(update, "Не нашла такое блюдо, список — /dishes")
+        await reply(update, "не нашла такое блюдо, список тут: /dishes")
 
 
 async def send_file(bot, chat_id: int):
@@ -392,7 +393,7 @@ async def cmd_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def job_daily(context: ContextTypes.DEFAULT_TYPE):
     if st.day_totals(date.today())["n"]:
-        await context.bot.send_message(config.OWNER_ID, report.format_day(st, date.today(), "Итог дня"),
+        await context.bot.send_message(config.OWNER_ID, report.format_day(st, date.today(), "итог дня"),
                                        parse_mode=ParseMode.HTML)
 
 
