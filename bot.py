@@ -12,6 +12,7 @@ eat-burn: телеграм-бот подсчёта калорий с дневн�
 """
 import asyncio
 import logging
+import os
 import re
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -34,6 +35,16 @@ import config
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 DATA.mkdir(exist_ok=True)
+
+
+def add_homebrew_to_path():
+    """launchd запускает бота с урезанным PATH: без Homebrew нет tesseract (скрины, этикетки) и ffmpeg (голосовые)."""
+    for folder in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if folder not in os.environ.get("PATH", "").split(":"):
+            os.environ["PATH"] = os.environ.get("PATH", "") + ":" + folder
+
+
+add_homebrew_to_path()
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -463,6 +474,8 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_action("typing")
     caption = update.message.caption or ""
     code = await asyncio.to_thread(products.decode_barcode, image)
+    if not code:  # последнее фото без найденного штрихкода — чтобы было на чём разбираться, если он там был
+        (DATA / "last_photo_no_barcode.jpg").write_bytes(image)
     if code:
         prod = await asyncio.to_thread(products.off_product, code)
         if prod:
@@ -987,8 +1000,18 @@ async def job_weekly(context: ContextTypes.DEFAULT_TYPE):
     await send_file(context.bot, config.OWNER_ID)
 
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Сетевые обрывы Telegram — одной строкой, бот сам переподключится. Остальное — с трейсом."""
+    from telegram.error import NetworkError
+    if isinstance(context.error, NetworkError):
+        log.warning("telegram: %s", context.error)
+    else:
+        log.error("ошибка при обработке", exc_info=context.error)
+
+
 def main():
     app = Application.builder().token(config.BOT_TOKEN).build()
+    app.add_error_handler(on_error)
     for name, fn in [("start", cmd_start), ("help", cmd_start), ("today", cmd_today), ("week", cmd_week),
                      ("undo", cmd_undo), ("weight", cmd_weight), ("goal", cmd_goal), ("food", cmd_food), ("dishes", cmd_dishes), ("dish_del", cmd_dish_del),
                      ("f", cmd_find), ("find", cmd_find),
