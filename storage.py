@@ -45,6 +45,10 @@ class Storage:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.executescript(SCHEMA)
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(dishes)")}
+        for col in ("protein", "fat", "carbs"):  # БЖУ у блюд появились позже — досоздаём колонки
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE dishes ADD COLUMN {col} REAL")
         self.day_start_hour = day_start_hour
         if self.get("day_start_hour") != str(day_start_hour):
             self._recompute_days()
@@ -123,10 +127,42 @@ class Storage:
     def get_dish(self, name: str) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM dishes WHERE name = ?", (norm(name),)).fetchone()
 
-    def put_dish(self, name: str, kcal: float):
+    def put_dish(self, name: str, kcal: float, protein=None, fat=None, carbs=None):
+        """Новая цифра ккал перезаписывает старую. Известные БЖУ сохраняются, если ккал те же
+        (из списка заказов БЖУ не видно), и сбрасываются, если блюдо стало другим."""
         with self.db:
-            self.db.execute("INSERT OR REPLACE INTO dishes (name, kcal, updated) VALUES (?,?,?)",
-                            (norm(name), kcal, date.today().isoformat()))
+            self.db.execute(
+                """INSERT INTO dishes (name, kcal, updated, protein, fat, carbs) VALUES (?,?,?,?,?,?)
+                   ON CONFLICT(name) DO UPDATE SET kcal = excluded.kcal, updated = excluded.updated,
+                     protein = COALESCE(excluded.protein, CASE WHEN kcal = excluded.kcal THEN protein END),
+                     fat = COALESCE(excluded.fat, CASE WHEN kcal = excluded.kcal THEN fat END),
+                     carbs = COALESCE(excluded.carbs, CASE WHEN kcal = excluded.kcal THEN carbs END)""",
+                (norm(name), kcal, date.today().isoformat(), protein, fat, carbs))
+
+    def find_dish(self, name: str) -> sqlite3.Row | None:
+        """Как get_dish, но понимает обрезанные названия из списка заказов: «…лапша с шампиньо...»."""
+        exact = self.get_dish(name)
+        if exact or not name.endswith("..."):
+            return exact
+        prefix = norm(name[:-3])
+        return next((d for d in self.dishes() if d["name"].startswith(prefix)), None)
+
+    def search_dishes(self, query: str = "", limit: int = 8) -> list[sqlite3.Row]:
+        """Блюда, в названии которых есть все слова запроса (можно начала слов: «сан пел»).
+        Сначала то, что записывается чаще. Пустой запрос — просто самое частое."""
+        words = norm(query).split()
+        freq: dict[str, int] = {}
+        for e in self.all_entries():
+            freq[norm(e["descr"])] = freq.get(norm(e["descr"]), 0) + 1
+        found = [d for d in self.dishes()
+                 if all(any(w2.startswith(w) for w2 in d["name"].replace("-", " ").split()) or w in d["name"]
+                        for w in words)]
+        found.sort(key=lambda d: (-freq.get(d["name"], 0), d["name"]))
+        return found[:limit]
+
+    def eaten_on(self, day: date) -> set[str]:
+        """Названия того, что уже записано за день, — чтобы не записать одно блюдо дважды."""
+        return {norm(e["descr"]) for e in self.entries(day) if e["kind"] != "workout"}
 
     def dishes(self) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM dishes ORDER BY name").fetchall()

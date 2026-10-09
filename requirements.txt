@@ -2,3 +2,4 @@ python-telegram-bot[job-queue]>=21.0
 openpyxl
 httpx
 pytest
+pillow

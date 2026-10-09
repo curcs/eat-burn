@@ -22,10 +22,11 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, Con
                           MessageHandler, filters)
 
 import report
+import screens
 from llm import LLM, LLMError
 from nutrition import Draft, Nutrition
 from parser import parse_edit_lines, parse_quick
-from storage import Storage
+from storage import Storage, norm
 
 import config
 
@@ -60,6 +61,7 @@ HELP = """пиши, что съела или сожгла:
 /weight 57.5: записать вес, норма пересчитается
 /goal 1300: своя норма (/goal auto вернёт расчёт по формуле)
 /food чак-чак 450: ккал на 100 г в мой справочник
+/f лимонад: найти блюдо в справочнике и записать в одно нажатие (/f без слов: самое частое)
 /dishes: мои блюда. <code>450 цезарь жан-жак</code> запоминается, потом хватит <code>цезарь жан-жак</code>
 /file: табличка"""
 
@@ -134,6 +136,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.from_user.id != config.OWNER_ID:
         return
     ud = context.user_data
+    if q.data.startswith("sl"):
+        await on_list_callback(update, context)
+        return
+    if q.data.startswith("fd:"):
+        await on_find_callback(update, context)
+        return
     if q.data.startswith("amb_"):
         amb = ud.pop("amb", None)
         await q.answer()
@@ -177,28 +185,41 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- блюда на порцию: «450 цезарь жан-жак» запоминается, потом хватает «цезарь жан-жак» ---
 
-async def show_dish(update: Update, context: ContextTypes.DEFAULT_TYPE, dish):
+def pfc_line(d) -> str:
+    """« · бжу 24/6/12», если БЖУ известны."""
+    if d.get("protein") is None:
+        return ""
+    return f" · бжу {report.n(d['protein'])}/{report.n(d['fat'])}/{report.n(d['carbs'])}"
+
+
+def dish_dict(row) -> dict:
+    return {k: row[k] for k in ("name", "kcal", "protein", "fat", "carbs")}
+
+
+async def show_dish(update: Update, context: ContextTypes.DEFAULT_TYPE, dish: dict, note: str = "как в прошлый раз"):
     ud = context.user_data
     ud.pop("draft", None)
-    ud["dish"] = {"name": dish["name"], "kcal": dish["kcal"]}
+    ud["dish"] = dish
     ud["awaiting"] = "dish"
     after = report.remaining(st, st.today()) - dish["kcal"]
     tail = f"останется {report.n(after)}" if after >= 0 else f"перебор {report.n(-after)}"
-    msg = await reply(update, f"{report.esc(dish['name'])} · <b>{report.n(dish['kcal'])} ккал</b>, как в прошлый раз\n"
+    msg = await reply(update, f"{report.esc(dish['name'])} · <b>{report.n(dish['kcal'])} ккал</b>{pfc_line(dish)}, {note}\n"
                               f"после этого {tail}\n\nдругая цифра? просто пришли число",
                       reply_markup=KEYBOARD)
     ud["draft_msg"] = msg.message_id
 
 
-def record_dish(context: ContextTypes.DEFAULT_TYPE, kcal: float) -> str:
+def record_dish(context: ContextTypes.DEFAULT_TYPE, kcal: float, source: str = "manual") -> str:
     ud = context.user_data
     dish = ud.pop("dish")
     ud.pop("draft_msg", None)
     ud["awaiting"] = None
-    st.add_entry("quick", dish["name"], kcal, "manual")
-    if kcal != dish["kcal"]:
+    if kcal != dish["kcal"]:  # другая цифра — БЖУ от старой уже не подходят
+        dish.update(kcal=kcal, protein=None, fat=None, carbs=None)
         st.put_dish(dish["name"], kcal)
-    return f"👌 записала {report.esc(dish['name'])} {report.n(kcal)} ккал. <b>{report.left_line(st, st.today())}</b>"
+    st.add_entry("quick", dish["name"], kcal, source, dish.get("protein"), dish.get("fat"), dish.get("carbs"))
+    return (f"👌 записала {report.esc(dish['name'])} {report.n(kcal)} ккал{pfc_line(dish)}\n"
+            f"<b>{report.left_line(st, st.today())}</b>")
 
 
 async def on_dish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -280,9 +301,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply(update, report.left_line(st, st.today()))
         return
 
-    dish = st.get_dish(text)
+    dish = st.find_dish(text)
     if dish:
-        await show_dish(update, context, dish)
+        await show_dish(update, context, dish_dict(dish))
         return
 
     await parse_and_show(update, context, llm.parse_text, text)
@@ -292,7 +313,85 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = await update.message.photo[-1].get_file()
     image = bytes(await photo.download_as_bytearray())
-    await parse_and_show(update, context, llm.parse_photo, image, update.message.caption or "")
+    await update.effective_chat.send_action("typing")
+    try:
+        screen = await asyncio.to_thread(screens.read_screenshot, image)
+    except Exception as e:  # нет tesseract, битая картинка — просто считаем, что это фото еды
+        log.warning("ocr: %s", e)
+        screen = None
+    if screen and screen.kind == "card":
+        await on_card(update, context, screen.dishes[0])
+    elif screen:
+        await on_list(update, context, screen.dishes)
+    else:
+        await parse_and_show(update, context, llm.parse_photo, image, update.message.caption or "")
+
+
+# --- скриншоты рационов ---
+
+async def on_card(update: Update, context: ContextTypes.DEFAULT_TYPE, d: screens.Dish):
+    """Подробная карточка: БЖУ сходятся с ккал и блюда ещё нет за сегодня — записываем сразу."""
+    st.put_dish(d.name, d.kcal, d.protein, d.fat, d.carbs)  # в справочник сразу, блюда повторяются
+    dish = {"name": d.name, "kcal": d.kcal, "protein": d.protein, "fat": d.fat, "carbs": d.carbs}
+    if norm(d.name) in st.eaten_on(st.today()):
+        await show_dish(update, context, dish, "уже записано сегодня, записать ещё раз?")
+    elif not d.consistent():
+        await show_dish(update, context, dish, "проверь цифры, ккал не сходятся с бжу")
+    else:
+        context.user_data["dish"] = dish
+        await update.message.set_reaction("👌")
+        grams = f" · {report.n(d.grams)} г" if d.grams else ""
+        await reply(update, record_dish(context, d.kcal, "screen").replace("ккал", f"ккал{grams}", 1))
+
+
+def list_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(f"{'✅' if it['on'] else '⬜'} {it['name'][:30]} · {report.n(it['kcal'])}",
+                                  callback_data=f"sl:{k}")] for k, it in enumerate(items)]
+    n_on = sum(it["on"] for it in items)
+    rows.append([InlineKeyboardButton(f"записать ({n_on})", callback_data="sl_ok"),
+                 InlineKeyboardButton("❌", callback_data="sl_no")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def on_list(update: Update, context: ContextTypes.DEFAULT_TYPE, dishes: list[screens.Dish]):
+    """Список заказов: блюд несколько, съедено может быть не всё — даём выбрать галочками."""
+    eaten = st.eaten_on(st.today())
+    items = []
+    for d in dishes:
+        known = st.find_dish(d.name)
+        name = known["name"] if known else d.name  # «…с шампиньо...» -> полное название из карточки
+        st.put_dish(name, d.kcal)
+        dish = dish_dict(st.get_dish(name))
+        dish.update(meal=d.meal, on=norm(name) not in eaten)
+        items.append(dish)
+    note = "\n\nсняла галочки с того, что уже записано сегодня" if not all(i["on"] for i in items) else ""
+    msg = await reply(update, f"нашла {len(items)} блюд, отметь, что съела:{note}", reply_markup=list_keyboard(items))
+    context.user_data["screen_list"] = {"items": items, "msg": msg.message_id}
+
+
+async def on_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    sl = context.user_data.get("screen_list")
+    if not sl or q.message.message_id != sl["msg"]:
+        await q.answer("этот список уже неактуален")
+        await q.edit_message_reply_markup(None)
+        return
+    await q.answer()
+    if q.data.startswith("sl:"):
+        it = sl["items"][int(q.data[3:])]
+        it["on"] = not it["on"]
+        await q.edit_message_reply_markup(list_keyboard(sl["items"]))
+        return
+    context.user_data.pop("screen_list")
+    if q.data == "sl_no":
+        await q.edit_message_text("❌ не записала")
+        return
+    chosen = [it for it in sl["items"] if it["on"]]
+    for it in chosen:
+        st.add_entry("quick", it["name"], it["kcal"], "screen", it["protein"], it["fat"], it["carbs"])
+    lines = "\n".join(f"• {report.esc(it['name'])} · {report.n(it['kcal'])}{pfc_line(it)}" for it in chosen)
+    await q.edit_message_text(f"👌 записала:\n{lines or 'ничего'}\n\n<b>{report.left_line(st, st.today())}</b>",
+                              parse_mode=ParseMode.HTML)
 
 
 # --- команды ---
@@ -370,6 +469,38 @@ async def cmd_dishes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @owner_only
+async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/f лимонад — блюда из справочника кнопками, нажатие сразу записывает. /f без слов — самое частое."""
+    query = " ".join(context.args)
+    rows = st.search_dishes(query)
+    if not rows:
+        await reply(update, f"в справочнике нет «{report.esc(query)}». "
+                            "запиши один раз с цифрой, например <code>100 лимонад</code>, и я запомню")
+        return
+    found = [dish_dict(r) for r in rows]
+    context.user_data["found"] = found
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"{d['name'][:34]} · {report.n(d['kcal'])}",
+                                                     callback_data=f"fd:{k}")] for k, d in enumerate(found)])
+    title = f"нашла по «{report.esc(query)}»" if query else "чаще всего записываешь"
+    await reply(update, f"{title}. нажми, чтобы записать:", reply_markup=kb)
+
+
+async def on_find_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопки не пропадают: два лимонада — два нажатия."""
+    q = update.callback_query
+    found = context.user_data.get("found") or []
+    k = int(q.data[3:])
+    if k >= len(found):
+        await q.answer("этот список уже неактуален")
+        return
+    d = found[k]
+    st.add_entry("quick", d["name"], d["kcal"], "manual", d["protein"], d["fat"], d["carbs"])
+    left = report.left_line(st, st.today())
+    await q.answer(f"👌 {d['name'][:40]} · {report.n(d['kcal'])}. {left}")
+    await reply(update, f"👌 {report.esc(d['name'])} · {report.n(d['kcal'])} ккал{pfc_line(d)}\n<b>{left}</b>")
+
+
+@owner_only
 async def cmd_dish_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = " ".join(context.args)
     if name and st.delete_dish(name):
@@ -407,6 +538,7 @@ def main():
     app = Application.builder().token(config.BOT_TOKEN).build()
     for name, fn in [("start", cmd_start), ("help", cmd_start), ("today", cmd_today), ("week", cmd_week),
                      ("undo", cmd_undo), ("weight", cmd_weight), ("goal", cmd_goal), ("food", cmd_food), ("dishes", cmd_dishes), ("dish_del", cmd_dish_del),
+                     ("f", cmd_find), ("find", cmd_find),
                      ("file", cmd_file)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(on_callback))
