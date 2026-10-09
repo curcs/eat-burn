@@ -147,6 +147,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data.startswith("pr:"):
         await on_product_callback(update, context)
         return
+    if q.data.startswith(("ed:", "dl:")) or q.data == "un":
+        await on_entry_callback(update, context)
+        return
     if q.data.startswith("amb_"):
         amb = ud.pop("amb", None)
         await q.answer()
@@ -254,6 +257,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if awaiting == "product" and ud.get("product") and await on_product_reply(update, context, text):
         return
+    if awaiting == "entry_kcal":
+        ud["awaiting"] = None
+        m = re.fullmatch(r"\s*(\d+(?:[.,]\d+)?)\s*(?:ккал|kcal)?\s*", text)
+        entry_id = ud.pop("edit_entry", None)
+        if m and entry_id and st.get_entry(entry_id):
+            st.set_entry_kcal(entry_id, float(m.group(1).replace(",", ".")))
+            e = st.get_entry(entry_id)
+            await reply(update, f"✏️ {report.esc(e['descr'])} теперь {report.n(e['kcal'])} ккал{pfc_line(dict(e))}\n"
+                                f"<b>{report.left_line(st, st.today())}</b>")
+            return
 
     if awaiting == "per100" and ud.get("draft"):
         m = re.match(r"^\s*(\d+(?:[.,]\d+)?)", text)
@@ -513,9 +526,50 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply(update, f"норма сейчас {report.goal(st)} ккал в день\n\n" + HELP)
 
 
+def entries_keyboard(day: date) -> InlineKeyboardMarkup | None:
+    """У каждой записи дня: ✏️ поменять ккал и 🗑 удалить."""
+    rows = []
+    for e in st.entries(day):
+        sign = "−" if e["kind"] == "workout" else ""
+        label = f"✏️ {e['ts'][11:16]} {e['descr'][:22]} · {sign}{report.n(e['kcal'])}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"ed:{e['id']}"),
+                     InlineKeyboardButton("🗑", callback_data=f"dl:{e['id']}")])
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
 @owner_only
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await reply(update, report.format_day(st, st.today()))
+    day = st.today()
+    await reply(update, report.format_day(st, day), reply_markup=entries_keyboard(day))
+
+
+async def on_entry_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ed:<id> — ждём новую цифру ккал; dl:<id> — удаляем сразу, с кнопкой «вернуть»; un — вернуть."""
+    q = update.callback_query
+    ud = context.user_data
+    await q.answer()
+    if q.data == "un":
+        saved = ud.pop("deleted", None)
+        if saved and not st.get_entry(saved["entry"]["id"]):
+            st.restore_entry(saved)
+            await q.edit_message_text(f"↩️ вернула {report.esc(saved['entry']['descr'])}. "
+                                      f"<b>{report.left_line(st, st.today())}</b>", parse_mode=ParseMode.HTML)
+        return
+    entry_id = int(q.data[3:])
+    e = st.get_entry(entry_id)
+    if not e:
+        await q.answer("этой записи уже нет")
+        return
+    if q.data.startswith("dl:"):
+        ud["deleted"] = st.delete_entry(entry_id)
+        await reply(update, f"🗑 удалила {report.esc(e['descr'])} · {report.n(e['kcal'])}. "
+                            f"<b>{report.left_line(st, st.today())}</b>",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ вернуть", callback_data="un")]]))
+    else:
+        ud["awaiting"] = "entry_kcal"
+        ud["edit_entry"] = entry_id
+        await reply(update, f"{report.esc(e['descr'])}: сейчас {report.n(e['kcal'])} ккал. "
+                            "сколько должно быть? пришли число")
 
 
 @owner_only

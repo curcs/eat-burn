@@ -156,6 +156,19 @@ def test_day_starts_at_4am(tmp_path):
     assert st.day_totals(date(2026, 10, 8))["eaten"] == 300
 
 
+def test_edit_delete_restore(st):
+    eid = st.add_entry("meal", "овсянка 60г", 228, "text", 8, 4, 40,
+                       [{"name": "овсянка", "grams": 60, "kcal": 228}])
+    st.set_entry_kcal(eid, 114)  # полпорции — БЖУ тоже пополам
+    e = st.get_entry(eid)
+    assert (e["kcal"], e["protein"], e["fat"], e["carbs"]) == (114, 4, 2, 20)
+    saved = st.delete_entry(eid)
+    assert st.get_entry(eid) is None
+    st.restore_entry(saved)
+    assert st.get_entry(eid)["kcal"] == 114
+    assert st.db.execute("SELECT COUNT(*) FROM entry_items WHERE entry_id = ?", (eid,)).fetchone()[0] == 1
+
+
 def test_undo(st):
     st.add_entry("quick", "a", 500, "manual")
     st.add_entry("meal", "b", 300, "text", items=[{"name": "b", "grams": 100, "kcal": 300}])

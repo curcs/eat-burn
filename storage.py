@@ -85,6 +85,38 @@ class Storage:
                   i.get("carbs"), i.get("match")) for i in items])
         return eid
 
+    def get_entry(self, entry_id: int) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
+
+    def delete_entry(self, entry_id: int) -> dict | None:
+        """Удаляет запись и отдаёт её целиком (с продуктами внутри) — чтобы можно было вернуть."""
+        row = self.get_entry(entry_id)
+        if not row:
+            return None
+        items = [dict(i) for i in self.db.execute("SELECT * FROM entry_items WHERE entry_id = ?", (entry_id,))]
+        with self.db:
+            self.db.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+        return {"entry": dict(row), "items": items}
+
+    def restore_entry(self, saved: dict) -> None:
+        e = saved["entry"]
+        with self.db:
+            self.db.execute(
+                "INSERT INTO entries (id, ts, day, kind, descr, kcal, protein, fat, carbs, source)"
+                " VALUES (:id, :ts, :day, :kind, :descr, :kcal, :protein, :fat, :carbs, :source)", e)
+            self.db.executemany(
+                "INSERT INTO entry_items (entry_id, name, grams, kcal, protein, fat, carbs, match)"
+                " VALUES (:entry_id, :name, :grams, :kcal, :protein, :fat, :carbs, :match)", saved["items"])
+
+    def set_entry_kcal(self, entry_id: int, kcal: float) -> None:
+        """Новая цифра ккал; БЖУ меняем в той же пропорции — обычно это другая порция того же."""
+        row = self.get_entry(entry_id)
+        k = kcal / row["kcal"] if row and row["kcal"] else None
+        scale = lambda v: None if v is None or k is None else round(v * k, 1)
+        with self.db:
+            self.db.execute("UPDATE entries SET kcal = ?, protein = ?, fat = ?, carbs = ? WHERE id = ?",
+                            (kcal, scale(row["protein"]), scale(row["fat"]), scale(row["carbs"]), entry_id))
+
     def delete_last(self) -> sqlite3.Row | None:
         row = self.db.execute("SELECT * FROM entries ORDER BY id DESC LIMIT 1").fetchone()
         if row:
