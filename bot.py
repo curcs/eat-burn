@@ -69,6 +69,9 @@ HELP = """пиши, что съела или сожгла:
 /food чак-чак 450: ккал на 100 г в мой справочник
 /f лимонад: найти блюдо в справочнике и записать в одно нажатие (/f без слов: самое частое)
 /dishes: мои блюда. <code>450 цезарь жан-жак</code> запоминается, потом хватит <code>цезарь жан-жак</code>
+<code>болит голова</code>, <code>давление</code>, <code>слабость</code>: запишу самочувствие
+🎙 голосовое: расшифрую и запишу как текст
+/patterns: что отличает дни с головной болью от обычных
 /tdee: реальный расход по весу и еде (нужно 2+ недели взвешиваний)
 /remind: напоминания про вес и еду (/remind off выключить)
 /file: табличка"""
@@ -156,6 +159,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data.startswith(("ed:", "dl:")) or q.data == "un":
         await on_entry_callback(update, context)
         return
+    if q.data.startswith("sy:"):
+        await on_symptom_callback(update, context)
+        return
     if q.data == "wt":
         st.add_water(GLASS_ML)
         await q.answer(f"💧 +{GLASS_ML} мл, сегодня {st.water_on(st.today()) / 1000:.2f} л".replace(".", ","))
@@ -183,7 +189,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await q.answer()
     if q.data == "ok":
-        descr = ", ".join(f"{i.name} {round(i.grams)}г" for i in draft.items)
+        descr = ", ".join(i.name if i.portion else f"{i.name} {round(i.grams)}г" for i in draft.items)
         st.add_entry("meal", descr, draft.total(), draft.source,
                      draft.total("protein"), draft.total("fat"), draft.total("carbs"),
                      [i.as_row() for i in draft.items])
@@ -257,11 +263,108 @@ async def on_dish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- сообщения ---
 
+# --- самочувствие ---
+
+SYMPTOMS = [  # (как пишут, что записываем)
+    (r"(?:болит\s+голова|голова\s+болит|головн\w*\s+бол\w*|мигрен\w*)", "голова"),
+    (r"(?:кружится\s+голова|голова\s+кружится|головокружени\w*|(?:низко\w*\s+|упало\s+)?давлени\w*"
+     r"(?:\s+(?:низко\w*|упало|упал\w*|падает))?)", "давление"),
+    (r"(?:слабост\w*|нет\s+сил)", "слабость"),
+]
+SYMPTOM_EMOJI = {"норм": "👍", "голова": "🤕", "давление": "😵", "слабость": "😩"}
+
+
+def extract_symptoms(text: str) -> tuple[list[str], str]:
+    """«съела творог, голова болит» -> (["голова"], «съела творог»)."""
+    kinds = []
+    for pattern, kind in SYMPTOMS:
+        if re.search(pattern, text, re.I):
+            kinds.append(kind)
+            text = re.sub(pattern, " ", text, flags=re.I)
+    rest = re.sub(r"(?:^|[,.;!\s])(?:и|а|ещё|еще|сильно|немного|чуть|очень|опять|снова|у меня)(?=[,.;!\s]|$)", " ", text, flags=re.I)
+    return kinds, rest.strip(" ,.;!-") if re.search(r"\w", rest) else ""
+
+
+def symptoms_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(f"{e} {k}", callback_data=f"sy:{k}")
+                                  for k, e in SYMPTOM_EMOJI.items()]])
+
+
+async def on_symptom_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    kind = q.data[3:]
+    st.add_symptom(kind)
+    await q.answer(f"{SYMPTOM_EMOJI[kind]} записала")
+    await q.edit_message_reply_markup(None)
+    await reply(update, f"самочувствие сегодня: {SYMPTOM_EMOJI[kind]} {kind}" +
+                ("" if kind == "норм" else ". береги себя 💛 если что, допиши ещё кнопкой или словами"))
+
+
+@owner_only
+async def cmd_patterns(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await reply(update, report.format_patterns(st, st.today()))
+
+
+# --- голосовые ---
+
+_whisper = None
+
+
+def transcribe(audio: bytes) -> str:
+    """Локальный whisper (модель small, как в tg2obsidian). Подсказка из справочника — чтобы «поке» не стало «покис»."""
+    global _whisper
+    import tempfile
+    import warnings
+    import whisper
+    warnings.filterwarnings("ignore")
+    if _whisper is None:
+        _whisper = whisper.load_model(getattr(config, "WHISPER_MODEL", "small"))
+    prompt = "Дневник питания. " + ", ".join(d["name"] for d in st.search_dishes(limit=20)) + "."
+    with tempfile.NamedTemporaryFile(suffix=".ogg") as f:
+        f.write(audio)
+        f.flush()
+        return _whisper.transcribe(f.name, language="ru", fp16=False, initial_prompt=prompt)["text"].strip()
+
+
+@owner_only
+async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    voice = update.message.voice or update.message.audio
+    await update.effective_chat.send_action("typing")
+    audio = bytes(await (await voice.get_file()).download_as_bytearray())
+    try:
+        text = await asyncio.to_thread(transcribe, audio)
+    except Exception as e:
+        log.warning("whisper: %s", e)
+        await reply(update, "не получилось расшифровать голосовое 😕 напиши текстом")
+        return
+    if not text:
+        await reply(update, "ничего не расслышала, попробуй ещё раз")
+        return
+    await reply(update, f"🎙 «{report.esc(text)}»")
+    await handle_text(update, context, text)
+
+
+# --- сообщения ---
+
 @owner_only
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    await handle_text(update, context, update.message.text.strip())
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Общий разбор для текста и расшифрованных голосовых."""
     ud = context.user_data
     awaiting = ud.get("awaiting")
+
+    kinds, rest = extract_symptoms(text)
+    if kinds:
+        for k in kinds:
+            st.add_symptom(k)
+        await reply(update, "записала самочувствие: " + ", ".join(f"{SYMPTOM_EMOJI[k]} {k}" for k in kinds) +
+                    ("" if rest else ". береги себя 💛"))
+        if not rest:
+            return
+        text = rest
 
     if awaiting == "weight" and await on_weight_reply(update, context, text):
         return
@@ -834,9 +937,12 @@ async def on_weight_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, te
     return True
 
 async def job_daily(context: ContextTypes.DEFAULT_TYPE):
-    if st.day_totals(st.today())["n"]:
-        await context.bot.send_message(config.OWNER_ID, report.format_day(st, st.today(), "итог дня"),
+    day = st.today()
+    if st.day_totals(day)["n"]:
+        await context.bot.send_message(config.OWNER_ID, report.format_day(st, day, "итог дня"),
                                        parse_mode=ParseMode.HTML)
+    if not st.symptoms_on(day):  # для /patterns нужны и плохие, и нормальные дни
+        await context.bot.send_message(config.OWNER_ID, "как самочувствие сегодня?", reply_markup=symptoms_keyboard())
 
 
 async def job_weekly(context: ContextTypes.DEFAULT_TYPE):
@@ -851,10 +957,11 @@ def main():
     for name, fn in [("start", cmd_start), ("help", cmd_start), ("today", cmd_today), ("week", cmd_week),
                      ("undo", cmd_undo), ("weight", cmd_weight), ("goal", cmd_goal), ("food", cmd_food), ("dishes", cmd_dishes), ("dish_del", cmd_dish_del),
                      ("f", cmd_find), ("find", cmd_find),
-                     ("file", cmd_file), ("remind", cmd_remind), ("tdee", cmd_tdee)]:
+                     ("file", cmd_file), ("remind", cmd_remind), ("tdee", cmd_tdee), ("patterns", cmd_patterns)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     tz = datetime.now().astimezone().tzinfo

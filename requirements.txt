@@ -6,3 +6,4 @@ pillow
 zxing-cpp
 matplotlib
 mcp>=2
+openai-whisper

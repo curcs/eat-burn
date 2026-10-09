@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS dishes (
     kcal REAL NOT NULL,          -- на порцию
     updated TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS symptoms (
+    id INTEGER PRIMARY KEY, ts TEXT NOT NULL, day TEXT NOT NULL,
+    kind TEXT NOT NULL           -- норм | голова | давление | слабость
+);
 CREATE TABLE IF NOT EXISTS water (
     id INTEGER PRIMARY KEY, ts TEXT NOT NULL, day TEXT NOT NULL, ml REAL NOT NULL
 );
@@ -232,6 +236,20 @@ class Storage:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO weights (day, kg) VALUES (?,?)",
                             ((day or self.today()).isoformat(), kg))
+
+    # --- самочувствие ---
+    def add_symptom(self, kind: str, when: datetime | None = None):
+        """«норм» за день отменяет себя, если потом пришёл симптом, и наоборот не трогает симптомы."""
+        when = when or datetime.now()
+        day = self.day_of(when).isoformat()
+        with self.db:
+            if kind != "норм":
+                self.db.execute("DELETE FROM symptoms WHERE day = ? AND kind = 'норм'", (day,))
+            self.db.execute("INSERT INTO symptoms (ts, day, kind) VALUES (?,?,?)",
+                            (when.isoformat(timespec="seconds"), day, kind))
+
+    def symptoms_on(self, day: date) -> set[str]:
+        return {r["kind"] for r in self.db.execute("SELECT kind FROM symptoms WHERE day = ?", (day.isoformat(),))}
 
     # --- вода ---
     def add_water(self, ml: float, when: datetime | None = None):

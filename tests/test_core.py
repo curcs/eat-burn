@@ -184,6 +184,33 @@ def test_watch_day(st):
     assert "⌚ часы: 300 активных, сверх обычных 100" in report.format_day(st, day)
 
 
+def test_patterns(st):
+    from datetime import timedelta
+    end = date(2026, 10, 30)
+    assert not report.patterns(st, end)["ok"]
+    for k in range(12):
+        d = datetime(2026, 10, 19, 10) + timedelta(days=k)
+        headache = k % 3 == 0  # каждый третий день: поздний завтрак и две банки лимонада
+        first = d.replace(hour=14 if headache else 9)
+        st.add_entry("quick", "рацион", 1100, "manual", when=first)
+        if headache:
+            st.add_entry("quick", "лимонад боржоми", 149, "manual", when=d.replace(hour=16))
+            st.add_entry("quick", "лимонад боржоми", 149, "manual", when=d.replace(hour=23))
+        st.add_symptom("голова" if headache else "норм", when=d.replace(hour=22))
+    p = report.patterns(st, end)
+    assert p["ok"] and p["bad"] == 4 and p["good"] == 8
+    top = {r["factor"] for r in p["rows"][:3]}
+    assert {"сладкие напитки, ккал", "первая еда, час"} <= top
+    text = report.format_patterns(st, end)
+    assert "первая еда, час: 14:00 против 9:00" in text and "298 против 0" in text
+
+
+def test_symptom_overrides_ok(st):
+    st.add_symptom("норм", datetime(2026, 10, 9, 22))
+    st.add_symptom("давление", datetime(2026, 10, 9, 22, 5))
+    assert st.symptoms_on(date(2026, 10, 9)) == {"давление"}
+
+
 def test_water(st):
     day = date(2026, 10, 9)
     st.add_water(250, datetime(2026, 10, 9, 10))
@@ -228,3 +255,13 @@ def test_adaptive_needs_logging(st):
     st.add_entry("quick", "рацион", 1300, "manual", when=datetime(2026, 10, 1, 12))
     a = report.adaptive(st, date(2026, 10, 9))
     assert not a["ok"] and "70%" in a["why"]
+
+
+def test_draft_uses_dish_portion(st, usda):
+    st.put_dish("санпелегрино гранат апельсин", 125, 0.3, 0, 30.4)
+    d = Nutrition(st, usda, use_off=False).fill(Draft([Item("санпелегрино", "sanpellegrino soda", 330),
+                                                        Item("банан", "banana raw", 120)]))
+    sanpe, banana = d.items
+    assert sanpe.name == "санпелегрино гранат апельсин" and sanpe.kcal == 125 and sanpe.part("carbs") == 30.4
+    assert banana.portion is None and round(banana.kcal) == 107
+    assert "санпелегрино гранат апельсин порция · 125 ккал" in report.format_draft(d, st, date(2026, 10, 9))

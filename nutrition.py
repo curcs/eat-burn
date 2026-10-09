@@ -42,8 +42,11 @@ class Item:
     grams: float
     per100: Per100 | None = None
     guess: float | None = None  # грубая оценка ккал/100 г от модели — для проверки и как запасной вариант
+    portion: dict | None = None  # блюдо из справочника: ккал и БЖУ на порцию, граммы не важны
 
     def part(self, attr: str) -> float | None:
+        if self.portion:
+            return self.portion.get(attr)
         if not self.per100:
             return None
         v = getattr(self.per100, attr)
@@ -94,9 +97,23 @@ class Nutrition:
 
     def fill(self, draft: Draft) -> Draft:
         for item in draft.items:
-            if item.per100 is None:
-                item.per100 = self.lookup(item.name, item.name_en, item.guess)
+            if item.per100 is None and item.portion is None:
+                dish = self.dish_for(item.name)
+                if dish:  # «санпелегрино» в составе фразы — порция из справочника, а не граммы по общей базе
+                    item.name = dish["name"]
+                    item.portion = {k: dish[k] for k in ("kcal", "protein", "fat", "carbs")}
+                    item.per100 = Per100(0, match="мой справочник, порция")
+                else:
+                    item.per100 = self.lookup(item.name, item.name_en, item.guess)
         return draft
+
+    def dish_for(self, name: str):
+        """Блюдо из справочника: точное название или единственное совпадение по словам."""
+        exact = self.storage.find_dish(name)
+        if exact:
+            return exact
+        similar = self.storage.search_dishes(name, limit=2)
+        return similar[0] if len(similar) == 1 else None
 
     def _usda(self, name_en: str, guess: float | None = None, exact: bool = False) -> Per100 | None:
         if not self.usda:

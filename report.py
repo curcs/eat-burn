@@ -83,6 +83,72 @@ def format_adaptive(st: Storage, end: date) -> str:
             "поставить: <code>/goal adapt</code>")
 
 
+SWEET_DRINKS = ("лимонад", "санпел", "sanpell", "боржоми", "кола", "cola", "сок ", "спрайт", "фанта")
+
+
+def day_factors(st: Storage, day: date) -> dict:
+    """Что было в этот день: из этого /patterns ищет отличия дней с симптомами от обычных."""
+    t = st.day_totals(day)
+    food = [e for e in st.entries(day) if e["kind"] not in ("workout", "watch")]
+    first = min((int(e["ts"][11:13]) + int(e["ts"][14:16]) / 60 for e in food
+                 if int(e["ts"][11:13]) >= st.day_start_hour), default=None)
+    late = sum(e["kcal"] for e in food if int(e["ts"][11:13]) >= 21 or int(e["ts"][11:13]) < st.day_start_hour)
+    drinks = sum(e["kcal"] for e in food if any(w in e["descr"].lower() for w in SWEET_DRINKS))
+    return {"сладкие напитки, ккал": drinks, "первая еда, час": first, "вода, л": st.water_on(day) / 1000,
+            "углеводы, г": t["carbs"], "белок, г": t["protein"], "всего съедено, ккал": t["eaten"],
+            "после 21:00, ккал": late, "активность, ккал": t["burned"]}
+
+
+def patterns(st: Storage, end: date, days: int = 42) -> dict:
+    """Сравнивает дни с симптомами и дни «норм». Нужно ≥10 отмеченных дней, из них ≥3 с симптомами и ≥3 «норм»."""
+    labeled = []
+    for k in range(days):
+        d = end - timedelta(days=k)
+        s = st.symptoms_on(d)
+        if s and st.day_totals(d)["eaten"] > 0:
+            labeled.append((d, s))
+    bad = [d for d, s in labeled if s - {"норм"}]
+    ok = [d for d, s in labeled if s == {"норм"}]
+    if len(labeled) < 10 or len(bad) < 3 or len(ok) < 3:
+        return {"ok": False, "why": f"отмечено дней: {len(labeled)} (нужно 10), с симптомами {len(bad)}, "
+                                    f"нормальных {len(ok)} (нужно хотя бы по 3)"}
+    fb, fo = [day_factors(st, d) for d in bad], [day_factors(st, d) for d in ok]
+    rows = []
+    for name in fb[0]:
+        a = [f[name] for f in fb if f[name] is not None]
+        b = [f[name] for f in fo if f[name] is not None]
+        if len(a) < 2 or len(b) < 2:
+            continue
+        ma, mb = sum(a) / len(a), sum(b) / len(b)
+        var = (sum((x - ma) ** 2 for x in a) + sum((x - mb) ** 2 for x in b)) / max(1, len(a) + len(b) - 2)
+        effect = (ma - mb) / var ** 0.5 if var > 0 else 0  # насколько различие больше обычного разброса
+        rows.append({"factor": name, "bad": ma, "ok": mb, "effect": effect})
+    rows.sort(key=lambda r: -abs(r["effect"]))
+    kinds = {}
+    for _, s in labeled:
+        for k in s - {"норм"}:
+            kinds[k] = kinds.get(k, 0) + 1
+    return {"ok": True, "labeled": len(labeled), "bad": len(bad), "good": len(ok), "kinds": kinds, "rows": rows}
+
+
+def format_patterns(st: Storage, end: date) -> str:
+    p = patterns(st, end)
+    if not p["ok"]:
+        return ("закономерности пока не посчитать: " + p["why"] + "\n"
+                "отмечай самочувствие кнопками в вечернем итоге, через пару недель хватит")
+    fmt = lambda name, v: f"{int(v)}:{int(round(v % 1 * 60)):02d}" if "час" in name else (
+        f"{v:.2f}".replace(".", ",") if name.endswith(", л") else n(v))
+    lines = []
+    for r in p["rows"][:5]:
+        strength = "заметно" if abs(r["effect"]) >= 0.8 else "немного" if abs(r["effect"]) >= 0.4 else "почти не"
+        lines.append(f"• {r['factor']}: {fmt(r['factor'], r['bad'])} против {fmt(r['factor'], r['ok'])}  ({strength} отличается)")
+    kinds = ", ".join(f"{k} {v}" for k, v in p["kinds"].items())
+    return (f"<b>самочувствие</b> за {p['labeled']} отмеченных дней: с симптомами {p['bad']} ({kinds}), норм {p['good']}\n\n"
+            "в дни с симптомами против обычных:\n" + "\n".join(lines) +
+            "\n\nэто наблюдения, а не причины: дней мало, и всё связано со всем. "
+            "но с этим удобно идти к врачу")
+
+
 def remaining(st: Storage, day: date) -> int:
     t = st.day_totals(day)
     return round(goal(st, day) - t["eaten"] + t["burned"])
@@ -106,7 +172,8 @@ def format_draft(d: Draft, st: Storage, day: date) -> str:
     lines = []
     for i in d.items:
         if i.per100:
-            lines.append(f"• {esc(i.name)} {n(i.grams)} г · {n(i.kcal)} ккал  <i>({esc(i.per100.match)})</i>")
+            size = "порция" if i.portion else f"{n(i.grams)} г"
+            lines.append(f"• {esc(i.name)} {size} · {n(i.kcal)} ккал  <i>({esc(i.per100.match)})</i>")
         else:
             lines.append(f"• {esc(i.name)} {n(i.grams)} г · ❓")
     total = d.total()

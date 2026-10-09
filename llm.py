@@ -93,6 +93,7 @@ class LLM:
             prev = old.get(item.name)
             if item.per100 is None and prev is not None:
                 item.per100 = prev.per100  # граммы могли поменяться, калорийность на 100 г — нет
+                item.portion = prev.portion
         return new
 
     def _ask(self, model, system, user, image, source, schema=SCHEMA) -> Draft:

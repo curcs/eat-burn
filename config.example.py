@@ -22,3 +22,6 @@ REMIND_GAP_HOURS = 4
 
 # Apple Watch: «часы 412» — активные ккал за день. Столько часы насчитают и в сидячий день, это уже в норме
 ACTIVE_BASELINE = 200
+
+# голосовые: модель whisper (tiny, base, small, medium). small — нормальный русский и быстро на Apple Silicon
+WHISPER_MODEL = "small"
