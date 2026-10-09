@@ -22,6 +22,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, Con
                           MessageHandler, filters)
 
 import report
+import products
 import screens
 from llm import LLM, LLMError
 from nutrition import Draft, Nutrition
@@ -143,6 +144,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data.startswith("fd:"):
         await on_find_callback(update, context)
         return
+    if q.data.startswith("pr:"):
+        await on_product_callback(update, context)
+        return
     if q.data.startswith("amb_"):
         amb = ud.pop("amb", None)
         await q.answer()
@@ -248,6 +252,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if awaiting == "weight" and await on_weight_reply(update, context, text):
         return
+    if awaiting == "product" and ud.get("product") and await on_product_reply(update, context, text):
+        return
 
     if awaiting == "per100" and ud.get("draft"):
         m = re.match(r"^\s*(\d+(?:[.,]\d+)?)", text)
@@ -324,17 +330,101 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = await update.message.photo[-1].get_file()
     image = bytes(await photo.download_as_bytearray())
     await update.effective_chat.send_action("typing")
+    caption = update.message.caption or ""
+    code = await asyncio.to_thread(products.decode_barcode, image)
+    if code:
+        prod = await asyncio.to_thread(products.off_product, code)
+        if prod:
+            await show_product(update, context, prod)
+        else:
+            await reply(update, f"штрихкод {code} нашла, но в Open Food Facts его нет 😕\n"
+                                "пришли фото этикетки с пищевой ценностью, посчитаю по ней")
+        return
     try:
         screen = await asyncio.to_thread(screens.read_screenshot, image)
     except Exception as e:  # нет tesseract, битая картинка — просто считаем, что это фото еды
         log.warning("ocr: %s", e)
         screen = None
+    if screen and screen.kind == "label":
+        prod = screen.label
+        m = re.match(r"^\s*(.*?)\s*(\d+(?:[.,]\d+)?)?\s*(?:г|гр|мл|g|ml)?\s*$", caption)
+        prod.name = (m.group(1) if m else caption).strip().lower()
+        grams = float(m.group(2).replace(",", ".")) if m and m.group(2) else None
+        await show_product(update, context, prod, grams)
+        return
     if screen and screen.kind == "card":
         await on_card(update, context, screen.dishes[0])
     elif screen:
         await on_list(update, context, screen.dishes, menu=screen.kind == "menu")
     else:
         await parse_and_show(update, context, llm.parse_photo, image, update.message.caption or "")
+
+
+# --- продукты в упаковке: штрихкод или этикетка ---
+
+async def show_product(update: Update, context: ContextTypes.DEFAULT_TYPE, prod: products.Product,
+                       grams: float | None = None):
+    """Знаем ккал на 100 г — спрашиваем, сколько съела. Граммы из подписи к фото записываем сразу."""
+    ud = context.user_data
+    ud["product"] = prod
+    if grams:
+        await reply(update, record_product(context, grams))
+        return
+    ud["awaiting"] = "product"
+    pfc = (f" · бжу {report.n(prod.protein)}/{report.n(prod.fat)}/{report.n(prod.carbs)}"
+           if prod.protein is not None else "")
+    title = report.esc(prod.name) if prod.name else "по этикетке"
+    ask = "сколько съела? пришли граммы" if prod.name else "сколько съела и как назвать? например <code>батончик 40</code>"
+    buttons = []
+    if prod.package_g:
+        g = prod.package_g
+        buttons.append([InlineKeyboardButton(f"вся упаковка, {report.n(g)} г · {prod.portion(g)['kcal']}", callback_data="pr:all"),
+                        InlineKeyboardButton(f"половина · {prod.portion(g / 2)['kcal']}", callback_data="pr:half")])
+    buttons.append([InlineKeyboardButton("❌", callback_data="pr:no")])
+    await reply(update, f"{title}\n<b>{report.n(prod.kcal)} ккал на 100 г</b>{pfc}  <i>({prod.source})</i>\n\n{ask}",
+                reply_markup=InlineKeyboardMarkup(buttons))
+
+
+def record_product(context: ContextTypes.DEFAULT_TYPE, grams: float, name: str = "") -> str:
+    ud = context.user_data
+    prod: products.Product = ud.pop("product")
+    ud["awaiting"] = None
+    prod.name = name or prod.name or "продукт по этикетке"
+    st.put_food(prod.name, prod.kcal, prod.protein, prod.fat, prod.carbs)  # дальше «… 50г» найдётся без фото
+    part = prod.portion(grams)
+    if prod.package_g and abs(grams - prod.package_g) < 1:
+        st.put_dish(prod.name, part["kcal"], part["protein"], part["fat"], part["carbs"])  # «вся банка» — блюдо
+    st.add_entry("quick", f"{prod.name} {report.n(grams)}г", part["kcal"], "label",
+                 part["protein"], part["fat"], part["carbs"])
+    return (f"👌 {report.esc(prod.name)} {report.n(grams)} г · {part['kcal']} ккал{pfc_line(part)}\n"
+            f"<b>{report.left_line(st, st.today())}</b>")
+
+
+async def on_product_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    prod = context.user_data.get("product")
+    await q.answer()
+    await q.edit_message_reply_markup(None)
+    if prod is None:
+        return
+    if q.data == "pr:no":
+        context.user_data.pop("product")
+        context.user_data["awaiting"] = None
+        await reply(update, "❌ не записала")
+        return
+    g = prod.package_g if q.data == "pr:all" else prod.package_g / 2
+    await reply(update, record_product(context, g))
+
+
+async def on_product_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """«40», «40 г», «батончик 40». False — это не ответ про граммы."""
+    m = re.fullmatch(r"\s*(?P<name>[^\d]*?)\s*(?P<g>\d+(?:[.,]\d+)?)\s*(?:г|гр|мл|g|ml)?\s*", text)
+    if not m:
+        context.user_data.pop("product", None)
+        context.user_data["awaiting"] = None
+        return False
+    await reply(update, record_product(context, float(m.group("g").replace(",", ".")), m.group("name").lower()))
+    return True
 
 
 # --- скриншоты рационов ---

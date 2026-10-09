@@ -3,3 +3,6 @@ openpyxl
 httpx
 pytest
 pillow
+zxing-cpp
+matplotlib
+mcp

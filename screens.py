@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 from PIL import Image, ImageOps
 
+from products import Product, parse_label
+
 MEAL = r"(?:\d-?й\s+)?(?:завтрак|обед|ужин|полдник|перекус)"
 _LABELS = re.compile(r"ккал.*\bб\b.*\bж\b.*\bу\b", re.I)
 _NUM = re.compile(r"\d+(?:[.,]\d+)?")
@@ -38,8 +40,9 @@ class Dish:
 
 @dataclass
 class Screen:
-    kind: str  # "card", "menu" (бумажное меню на день) или "list"
+    kind: str  # "card", "menu" (бумажное меню на день), "list" или "label" (этикетка «пищевая ценность»)
     dishes: list[Dish]
+    label: Product | None = None
 
 
 def ocr(img: Image.Image) -> str:
@@ -65,6 +68,9 @@ def read_screenshot(image: bytes) -> Screen | None:
         menu = parse_menu(ocr(g))
     if len(menu) >= 2:
         return Screen("menu", menu)
+    label = parse_label(text)
+    if label:
+        return Screen("label", [], label)
     # бледный серый текст и две колонки: увеличиваем, повышаем контраст, читаем колонки по отдельности
     w, h = img.size
     dishes = []
