@@ -199,3 +199,9 @@ def test_undo(st):
     st.add_entry("meal", "b", 300, "text", items=[{"name": "b", "grams": 100, "kcal": 300}])
     assert st.delete_last()["descr"] == "b"
     assert st.db.execute("SELECT COUNT(*) FROM entry_items").fetchone()[0] == 0
+
+
+def test_week_chart_png(st):
+    st.add_entry("quick", "рацион", 1400, "manual", when=datetime(2026, 10, 8, 12))
+    png = report.week_chart(st, date(2026, 10, 9))
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 10_000

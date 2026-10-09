@@ -627,6 +627,8 @@ async def on_entry_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @owner_only
 async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply(update, report.format_week(st, st.today()))
+    png = await asyncio.to_thread(report.week_chart, st, st.today())
+    await update.effective_message.reply_photo(png)
 
 
 @owner_only
@@ -823,6 +825,7 @@ async def job_daily(context: ContextTypes.DEFAULT_TYPE):
 async def job_weekly(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(config.OWNER_ID, report.format_week(st, st.today()),
                                    parse_mode=ParseMode.HTML)
+    await context.bot.send_photo(config.OWNER_ID, await asyncio.to_thread(report.week_chart, st, st.today()))
     await send_file(context.bot, config.OWNER_ID)
 
 

@@ -112,6 +112,65 @@ def format_week(st: Storage, end: date) -> str:
     return text
 
 
+# цвета из эталонной палитры dataviz: одна серия — slot 1, текст — токены текста, не цвет серии
+C_SURFACE, C_TEXT, C_MUTED, C_GRID, C_SERIES = "#fcfcfb", "#0b0b0b", "#52514e", "#e6e5e0", "#2a78d6"
+
+
+def week_chart(st: Storage, end: date) -> bytes:
+    """PNG: съедено по дням (столбцы) против «можно сегодня» = норма + активность (пунктир).
+    Вес — отдельной панелью снизу, если записей хотя бы две (никаких двух шкал на одном графике)."""
+    import io
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.dates
+    import matplotlib.pyplot as plt
+
+    days = [end - timedelta(days=6 - k) for k in range(7)]
+    totals = [st.day_totals(d) for d in days]
+    eaten = [t["eaten"] for t in totals]
+    allowed = [goal(st, d) + t["burned"] for d, t in zip(days, totals)]
+    weights = [w for w in st.weights() if days[0] - timedelta(days=21) <= date.fromisoformat(w["day"]) <= end]
+
+    rows = 2 if len(weights) >= 2 else 1
+    fig, axes = plt.subplots(rows, 1, figsize=(7, 4.2 if rows == 1 else 6.2), dpi=150,
+                             gridspec_kw={"height_ratios": [3, 1.4][:rows]}, facecolor=C_SURFACE)
+    axes = [axes] if rows == 1 else list(axes)
+    ax = axes[0]
+    xs = list(range(7))
+    ax.bar(xs, eaten, width=0.56, color=C_SERIES, zorder=2)
+    ax.step([-0.5, *xs, 6.5], [allowed[0], *allowed, allowed[-1]], where="mid",
+            color=C_MUTED, linewidth=2, linestyle=(0, (4, 3)), zorder=3)
+    for x, e, a in zip(xs, eaten, allowed):
+        if e > a:
+            ax.text(x, e + 25, f"+{n(e - a)}", ha="center", va="bottom", fontsize=9, color=C_TEXT)
+    ax.text(6.55, allowed[-1], "можно\nс активностью", va="center", ha="left", fontsize=8, color=C_MUTED)
+    ax.set_xticks(xs, [f"{WEEKDAYS[d.weekday()]}\n{d:%d.%m}" for d in days])
+    days_with_food = sum(1 for e in eaten if e) or 1
+    ax.set_title(f"съедено за неделю, ккал · в среднем {n(sum(eaten) / days_with_food)}",
+                 loc="left", fontsize=11, color=C_TEXT)
+
+    if rows == 2:
+        wa = axes[1]
+        wd = [date.fromisoformat(w["day"]) for w in weights]
+        wa.plot(wd, [w["kg"] for w in weights], color=C_SERIES, linewidth=2, marker="o", markersize=5, zorder=2)
+        wa.set_title("вес, кг", loc="left", fontsize=10, color=C_TEXT)
+        wa.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%d.%m"))
+        wa.text(wd[-1], weights[-1]["kg"], f"  {weights[-1]['kg']}", va="center", fontsize=9, color=C_TEXT)
+
+    for a in axes:
+        a.set_facecolor(C_SURFACE)
+        a.grid(axis="y", color=C_GRID, linewidth=0.8, zorder=0)
+        a.tick_params(colors=C_MUTED, labelsize=8, length=0)
+        for side in ("top", "right", "left"):
+            a.spines[side].set_visible(False)
+        a.spines["bottom"].set_color(C_GRID)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=C_SURFACE)
+    plt.close(fig)
+    return buf.getvalue()
+
+
 def build_xlsx(st: Storage, path: Path) -> Path:
     wb = Workbook()
     bold = Font(bold=True)
