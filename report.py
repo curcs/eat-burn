@@ -12,6 +12,7 @@ from nutrition import Draft
 from storage import Storage
 
 LOW_AVG_KCAL = 1200
+SHOW_PFC = False  # бжу в ответах бота; в базе и xlsx они есть всегда
 WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
 
@@ -213,10 +214,10 @@ def format_draft(d: Draft, st: Storage, day: date) -> str:
         else:
             lines.append(f"• {esc(i.name)} {n(i.grams)} г · ❓")
     total = d.total()
-    pfc = f"бжу {n(d.total('protein'))}/{n(d.total('fat'))}/{n(d.total('carbs'))}"
+    pfc = f" · бжу {n(d.total('protein'))}/{n(d.total('fat'))}/{n(d.total('carbs'))}" if SHOW_PFC else ""
     after = remaining(st, day) - total
     tail = f"останется {n(after)}" if after >= 0 else f"перебор {n(-after)}"
-    return "\n".join(lines) + f"\n\n<b>итого {n(total)} ккал</b> · {pfc}\nпосле этого {tail}"
+    return "\n".join(lines) + f"\n\n<b>итого {n(total)} ккал</b>{pfc}\nпосле этого {tail}"
 
 
 def format_day(st: Storage, day: date, title: str = "сегодня") -> str:
@@ -231,10 +232,10 @@ def format_day(st: Storage, day: date, title: str = "сегодня") -> str:
         sign = "−" if e["kind"] == "workout" else ""
         rows.append(f"{e['ts'][11:16]}  {sign}{n(e['kcal'])}  {esc(e['descr'])}")
     body = "\n".join(rows) or "пока пусто"
-    return (f"<b>{title}</b>\n{body}\n\n"
-            f"съедено {n(t['eaten'])} · тренировки +{n(t['burned'])} · норма {n(g)}\n"
-            f"бжу {n(t['protein'])}/{n(t['fat'])}/{n(t['carbs'])}{water_line(st, day)}\n"
-            f"<b>{left_line(st, day)}</b>")
+    summary = [f"съедено {n(t['eaten'])} · тренировки +{n(t['burned'])} · норма {n(g)}",
+               f"бжу {n(t['protein'])}/{n(t['fat'])}/{n(t['carbs'])}" if SHOW_PFC else "",
+               water_line(st, day), f"<b>{left_line(st, day)}</b>"]
+    return f"<b>{title}</b>\n{body}\n\n" + "\n".join(s for s in summary if s)
 
 
 def water_line(st: Storage, day: date) -> str:
@@ -242,7 +243,7 @@ def water_line(st: Storage, day: date) -> str:
     if not h["total"]:
         return ""
     tea = f" (из них чай и кофе {liters(h['drinks'])})" if h["drinks"] else ""
-    return f"\n💧 {liters(h['total'])}{tea}"
+    return f"💧 {liters(h['total'])}{tea}"
 
 
 def format_week(st: Storage, end: date) -> str:

@@ -39,6 +39,7 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", le
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("eat-burn")
 
+report.SHOW_PFC = getattr(config, "SHOW_PFC", False)
 st = Storage(str(DATA / "eatburn.db"), getattr(config, "DAY_START_HOUR", 4),
              getattr(config, "ACTIVE_BASELINE", 200))
 nutr = Nutrition(st, DATA / "usda.db")
@@ -54,7 +55,7 @@ HELP = """пиши, что съела или сожгла:
 <code>-200 бег</code>: тренировка, верну ккал в остаток
 <code>овсянка 60г, банан, ложка мёда</code>: посчитаю по базе и спрошу ✅
 📷 фото тарелки: то же самое, подпись к фото поможет («гречка 200г»)
-📷 скрин или бумажное меню рациона: прочитаю ккал и бжу
+📷 скрин или бумажное меню рациона: прочитаю калории
 📷 штрихкод или этикетка «пищевая ценность»: посчитаю по граммам
 <code>часы 412</code>: активные ккал за день с apple watch
 <code>стакан воды</code>, <code>вода 500</code>: 💧 вода; чай и кофе считаю в воду сами (90% и 80%)
@@ -211,8 +212,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- блюда на порцию: «450 цезарь жан-жак» запоминается, потом хватает «цезарь жан-жак» ---
 
 def pfc_line(d) -> str:
-    """« · бжу 24/6/12», если БЖУ известны."""
-    if d.get("protein") is None:
+    """« · бжу 24/6/12», если БЖУ известны и их показ включён (SHOW_PFC в config.py)."""
+    if not report.SHOW_PFC or d.get("protein") is None:
         return ""
     return f" · бжу {report.n(d['protein'])}/{report.n(d['fat'])}/{report.n(d['carbs'])}"
 
@@ -501,8 +502,7 @@ async def show_product(update: Update, context: ContextTypes.DEFAULT_TYPE, prod:
         await reply(update, record_product(context, grams))
         return
     ud["awaiting"] = "product"
-    pfc = (f" · бжу {report.n(prod.protein)}/{report.n(prod.fat)}/{report.n(prod.carbs)}"
-           if prod.protein is not None else "")
+    pfc = pfc_line({"protein": prod.protein, "fat": prod.fat, "carbs": prod.carbs})
     title = report.esc(prod.name) if prod.name else "по этикетке"
     ask = "сколько съела? пришли граммы" if prod.name else "сколько съела и как назвать? например <code>батончик 40</code>"
     buttons = []
@@ -566,7 +566,7 @@ async def on_card(update: Update, context: ContextTypes.DEFAULT_TYPE, d: screens
     if norm(d.name) in st.eaten_on(st.today()):
         await show_dish(update, context, dish, "уже записано сегодня, записать ещё раз?")
     elif not d.consistent():
-        await show_dish(update, context, dish, "проверь цифры, ккал не сходятся с бжу")
+        await show_dish(update, context, dish, "проверь цифры, похоже, я что-то не так прочитала")
     else:
         context.user_data["dish"] = dish
         await update.message.set_reaction("👌")

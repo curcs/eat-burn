@@ -25,3 +25,6 @@ ACTIVE_BASELINE = 200
 
 # голосовые: модель whisper (tiny, base, small, medium). small — нормальный русский и быстро на Apple Silicon
 WHISPER_MODEL = "small"
+
+# показывать бжу в ответах бота (в базе и xlsx они есть всегда)
+SHOW_PFC = False
