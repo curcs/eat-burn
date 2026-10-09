@@ -28,6 +28,61 @@ def goal(st: Storage, today: date | None = None) -> int:
         deficit=float(st.get("deficit", 0.15)))
 
 
+KCAL_PER_KG = 7700
+
+
+def formula_tdee(st: Storage, today: date) -> float:
+    """Расход без тренировок по формуле: базовый обмен × 1,2."""
+    return profile_calc.bmr(st.last_weight() or float(st.get("start_weight", 60)),
+                            float(st.get("height_cm", 165)), today.year - int(st.get("birth_year", 1996)),
+                            st.get("sex", "f")) * float(st.get("activity", 1.2))
+
+
+def adaptive(st: Storage, end: date, window_days: int = 28) -> dict:
+    """Реальный расход по факту: сколько ела + как менялся вес (1 кг ≈ 7 700 ккал).
+    {"ok": False, "why": ...}, пока данных мало: нужны ≥2 взвешивания через ≥14 дней
+    и записанная еда хотя бы в 70% дней между ними (пропуски занижают «съедено»)."""
+    start = end - timedelta(days=window_days - 1)
+    ws = [(date.fromisoformat(w["day"]), w["kg"]) for w in st.weights()
+          if start <= date.fromisoformat(w["day"]) <= end]
+    if len(ws) < 2 or (ws[-1][0] - ws[0][0]).days < 14:
+        have = (ws[-1][0] - ws[0][0]).days if len(ws) >= 2 else 0
+        return {"ok": False, "why": f"нужны взвешивания хотя бы через 14 дней (сейчас {have} дн., "
+                                    f"взвешиваний за 4 недели: {len(ws)})"}
+    span = [ws[0][0] + timedelta(days=k) for k in range((ws[-1][0] - ws[0][0]).days + 1)]
+    totals = [st.day_totals(d) for d in span]
+    logged = [t for t in totals if t["eaten"] > 0]
+    if len(logged) < 0.7 * len(span):
+        return {"ok": False, "why": f"еда записана в {len(logged)} из {len(span)} дней, нужно хотя бы 70%"}
+    # наклон веса методом наименьших квадратов: взвешиваний может быть несколько, берём тренд, а не две точки
+    xs = [(d - ws[0][0]).days for d, _ in ws]
+    mx, my = sum(xs) / len(xs), sum(k for _, k in ws) / len(ws)
+    slope = sum((x - mx) * (k - my) for x, (_, k) in zip(xs, ws)) / sum((x - mx) ** 2 for x in xs)  # кг/день
+    eaten = sum(t["eaten"] for t in logged) / len(logged)
+    burned = sum(t["burned"] for t in logged) / len(logged)
+    real = eaten - slope * KCAL_PER_KG
+    expected = formula_tdee(st, end) + burned
+    deficit = float(st.get("deficit", 0.15))
+    return {"ok": True, "days": len(span), "logged": len(logged), "kg_per_week": slope * 7,
+            "eaten": eaten, "burned": burned, "real": real, "expected": expected,
+            "suggested": int(round(real * (1 - deficit) / 50) * 50)}
+
+
+def format_adaptive(st: Storage, end: date) -> str:
+    a = adaptive(st, end)
+    if not a["ok"]:
+        return f"реальный расход пока не посчитать: {a['why']}"
+    diff = a["real"] - a["expected"]
+    verdict = ("формула и активность почти совпадают с реальностью" if abs(diff) < 100 else
+               f"по факту тратишь на {n(abs(diff))} ккал {'больше' if diff > 0 else 'меньше'}, чем по формуле с активностью")
+    return (f"<b>реальный расход</b> за {a['days']} дн. (еда записана в {a['logged']})\n"
+            f"ела в среднем {n(a['eaten'])}, вес {a['kg_per_week']:+.2f} кг в неделю\n"
+            f"→ тратишь около <b>{n(a['real'])}</b> ккал в день\n"
+            f"по формуле с активностью {n(a['expected'])}: {verdict}\n\n"
+            f"норма с тем же дефицитом была бы {n(a['suggested'])} (сейчас {n(goal(st, end))}). "
+            "поставить: <code>/goal adapt</code>")
+
+
 def remaining(st: Storage, day: date) -> int:
     t = st.day_totals(day)
     return round(goal(st, day) - t["eaten"] + t["burned"])
@@ -109,6 +164,9 @@ def format_week(st: Storage, end: date) -> str:
     w = st.weights()
     if len(w) >= 2:
         text += f"\nвес: {w[0]['kg']} → {w[-1]['kg']} кг"
+    a = adaptive(st, end)
+    if a["ok"]:
+        text += f"\nреальный расход около {n(a['real'])} ккал в день, подробнее /tdee"
     return text
 
 

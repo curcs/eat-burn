@@ -65,6 +65,7 @@ HELP = """пиши, что съела или сожгла:
 /food чак-чак 450: ккал на 100 г в мой справочник
 /f лимонад: найти блюдо в справочнике и записать в одно нажатие (/f без слов: самое частое)
 /dishes: мои блюда. <code>450 цезарь жан-жак</code> запоминается, потом хватит <code>цезарь жан-жак</code>
+/tdee: реальный расход по весу и еде (нужно 2+ недели взвешиваний)
 /remind: напоминания про вес и еду (/remind off выключить)
 /file: табличка"""
 
@@ -659,12 +660,24 @@ async def cmd_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     arg = context.args[0] if context.args else ""
     if arg == "auto":
         st.set("goal_manual", "")
+    elif arg == "adapt":
+        a = report.adaptive(st, st.today())
+        if not a["ok"]:
+            await reply(update, f"пока рано: {a['why']}. подробнее: /tdee")
+            return
+        st.set("goal_manual", a["suggested"])
     elif arg.isdigit():
         st.set("goal_manual", int(arg))
     else:
-        await reply(update, f"норма {report.goal(st)} ккал. поменять: <code>/goal 1300</code> или <code>/goal auto</code>")
+        await reply(update, f"норма {report.goal(st)} ккал. поменять: <code>/goal 1300</code>, "
+                            "<code>/goal auto</code> (по формуле) или <code>/goal adapt</code> (по реальному расходу)")
         return
     await reply(update, f"норма {report.goal(st)} ккал. {report.left_line(st, st.today())}")
+
+
+@owner_only
+async def cmd_tdee(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await reply(update, report.format_adaptive(st, st.today()))
 
 
 @owner_only
@@ -834,7 +847,7 @@ def main():
     for name, fn in [("start", cmd_start), ("help", cmd_start), ("today", cmd_today), ("week", cmd_week),
                      ("undo", cmd_undo), ("weight", cmd_weight), ("goal", cmd_goal), ("food", cmd_food), ("dishes", cmd_dishes), ("dish_del", cmd_dish_del),
                      ("f", cmd_find), ("find", cmd_find),
-                     ("file", cmd_file), ("remind", cmd_remind)]:
+                     ("file", cmd_file), ("remind", cmd_remind), ("tdee", cmd_tdee)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))

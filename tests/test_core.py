@@ -205,3 +205,26 @@ def test_week_chart_png(st):
     st.add_entry("quick", "рацион", 1400, "manual", when=datetime(2026, 10, 8, 12))
     png = report.week_chart(st, date(2026, 10, 9))
     assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 10_000
+
+
+def test_adaptive_tdee(st):
+    from datetime import timedelta
+    start = date(2026, 9, 12)
+    assert not report.adaptive(st, date(2026, 10, 9))["ok"]
+    for k in range(28):
+        st.add_entry("quick", "рацион", 1400, "manual", when=datetime(2026, 9, 12, 12) + timedelta(days=k))
+    # −0,25 кг в неделю: 0,25 × 7700 / 7 = 275 ккал дефицита в день -> расход ≈ 1675
+    for k in (0, 7, 14, 21, 27):
+        st.add_weight(round(58 - 0.25 * k / 7, 3), start + timedelta(days=k))
+    a = report.adaptive(st, date(2026, 10, 9))
+    assert a["ok"] and abs(a["real"] - 1675) < 2 and abs(a["kg_per_week"] + 0.25) < 0.001
+    assert a["suggested"] == 1400  # 1675 × 0,85 ≈ 1424 -> 1400
+    assert "тратишь около <b>1 675</b>" in report.format_adaptive(st, date(2026, 10, 9))
+
+
+def test_adaptive_needs_logging(st):
+    st.add_weight(58, date(2026, 9, 20))
+    st.add_weight(57.5, date(2026, 10, 9))
+    st.add_entry("quick", "рацион", 1300, "manual", when=datetime(2026, 10, 1, 12))
+    a = report.adaptive(st, date(2026, 10, 9))
+    assert not a["ok"] and "70%" in a["why"]
