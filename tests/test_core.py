@@ -119,7 +119,7 @@ def test_day_remaining_with_workout(st, tmp_path):
     assert "осталось 343" in report.format_day(st, day)
 
     st.set("goal_manual", 1000)
-    assert report.left_line(st, day) == "перебор 7 ккал"
+    assert report.left_line(st, day).startswith("🟡 сверх нормы на 7, но ещё в дефиците")
 
     st.add_weight(57.5, day)
     wb = load_workbook(report.build_xlsx(st, tmp_path / "x.xlsx"))
@@ -296,3 +296,17 @@ def test_flavoured_water_is_water():
     assert bot.water_amount("аромати 500") == ("+", 500)
     assert bot.water_amount("минералка") == ("+", 200)
     assert bot.water_amount("лимонад боржоми") is None
+
+
+def test_three_levels(st):
+    day = date(2026, 10, 9)
+    at = datetime(2026, 10, 9, 12)
+    maint = report.formula_tdee(st, day)            # ~1584 для профиля по умолчанию; норма 1350
+    st.add_entry("quick", "рацион", 1300, "manual", when=at)
+    assert report.level(st, day)[0] == "норма" and report.left_line(st, day) == "осталось 50 ккал"
+    st.add_entry("quick", "лимонад", 149, "manual", when=at)
+    assert report.level(st, day)[0] == "дефицит"
+    st.add_entry("quick", "блинчики", 294, "manual", when=at)
+    kind, over_goal, over_maint = report.level(st, day)
+    assert kind == "перебор" and round(over_maint) == round(1743 - maint)
+    assert report.left_line(st, day).startswith("🔺 перебор: на ")

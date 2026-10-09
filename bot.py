@@ -227,10 +227,9 @@ async def show_dish(update: Update, context: ContextTypes.DEFAULT_TYPE, dish: di
     ud.pop("draft", None)
     ud["dish"] = dish
     ud["awaiting"] = "dish"
-    after = report.remaining(st, st.today()) - dish["kcal"]
-    tail = f"останется {report.n(after)}" if after >= 0 else f"перебор {report.n(-after)}"
+    tail = report.balance_text(st, st.today(), extra=dish["kcal"]).replace("осталось", "останется")
     msg = await reply(update, f"{report.esc(dish['name'])} · <b>{report.n(dish['kcal'])} ккал</b>{pfc_line(dish)}, {note}\n"
-                              f"после этого {tail}\n\nдругая цифра? просто пришли число",
+                              f"после этого: {tail}\n\nдругая цифра? просто пришли число",
                       reply_markup=KEYBOARD)
     ud["draft_msg"] = msg.message_id
 

@@ -201,9 +201,34 @@ def n(x: float) -> str:
     return f"{round(x):,}".replace(",", " ")
 
 
+def maintenance(st: Storage, day: date) -> float:
+    """Расход без тренировок: реальный, если уже посчитан по весу (/tdee), иначе по формуле."""
+    a = adaptive(st, day)
+    return a["real"] - a["burned"] if a["ok"] else formula_tdee(st, day)
+
+
+def level(st: Storage, day: date, extra: float = 0) -> tuple[str, float, float]:
+    """(«норма» | «дефицит» | «перебор», насколько выше нормы, насколько ниже/выше расхода).
+    Норма — это расход минус дефицит: день между нормой и расходом не толстит, а просто худеет медленнее."""
+    t = st.day_totals(day)
+    over_goal = t["eaten"] + extra - t["burned"] - goal(st, day)
+    over_maint = t["eaten"] + extra - t["burned"] - maintenance(st, day)
+    if over_goal <= 0:
+        return "норма", over_goal, over_maint
+    return ("дефицит" if over_maint <= 0 else "перебор"), over_goal, over_maint
+
+
+def balance_text(st: Storage, day: date, extra: float = 0) -> str:
+    kind, over_goal, over_maint = level(st, day, extra)
+    if kind == "норма":
+        return f"осталось {n(-over_goal)} ккал"
+    if kind == "дефицит":
+        return f"🟡 сверх нормы на {n(over_goal)}, но ещё в дефиците: до расхода {n(-over_maint)}"
+    return f"🔺 перебор: на {n(over_maint)} больше расхода (сверх нормы на {n(over_goal)})"
+
+
 def left_line(st: Storage, day: date) -> str:
-    left = remaining(st, day)
-    return f"осталось {n(left)} ккал" if left >= 0 else f"перебор {n(-left)} ккал"
+    return balance_text(st, day)
 
 
 def format_draft(d: Draft, st: Storage, day: date) -> str:
@@ -216,9 +241,8 @@ def format_draft(d: Draft, st: Storage, day: date) -> str:
             lines.append(f"• {esc(i.name)} {n(i.grams)} г · ❓")
     total = d.total()
     pfc = f" · бжу {n(d.total('protein'))}/{n(d.total('fat'))}/{n(d.total('carbs'))}" if SHOW_PFC else ""
-    after = remaining(st, day) - total
-    tail = f"останется {n(after)}" if after >= 0 else f"перебор {n(-after)}"
-    return "\n".join(lines) + f"\n\n<b>итого {n(total)} ккал</b>{pfc}\nпосле этого {tail}"
+    tail = balance_text(st, day, extra=total).replace("осталось", "останется")
+    return "\n".join(lines) + f"\n\n<b>итого {n(total)} ккал</b>{pfc}\nпосле этого: {tail}"
 
 
 def format_day(st: Storage, day: date, title: str = "сегодня") -> str:
@@ -257,12 +281,13 @@ def format_week(st: Storage, end: date) -> str:
             lines.append(f"{WEEKDAYS[d.weekday()]} {d:%d.%m}  ·")
             continue
         left = remaining(st, d)
-        mark = "✅" if left >= 0 else "🔺"
+        mark = {"норма": "✅", "дефицит": "🟡", "перебор": "🔺"}[level(st, d)[0]]
         burn = f" +{n(t['burned'])}" if t["burned"] else ""
         lines.append(f"{WEEKDAYS[d.weekday()]} {d:%d.%m}  {n(t['eaten'])}{burn}  {mark} {n(left)}")
         if t["eaten"]:
             eaten_days.append(t["eaten"])
-    text = f"<b>неделя {start:%d.%m}-{end:%d.%m}</b>\n<pre>" + "\n".join(lines) + "</pre>"
+    text = (f"<b>неделя {start:%d.%m}-{end:%d.%m}</b>\n<pre>" + "\n".join(lines) + "</pre>"
+            "\n✅ в норме · 🟡 сверх нормы, но в дефиците · 🔺 больше расхода")
     if eaten_days:
         avg = sum(eaten_days) / len(eaten_days)
         text += f"\nв среднем {n(avg)} ккал в день при норме {n(goal(st, end))}"
