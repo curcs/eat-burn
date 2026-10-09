@@ -39,7 +39,8 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", le
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("eat-burn")
 
-st = Storage(str(DATA / "eatburn.db"), getattr(config, "DAY_START_HOUR", 4))
+st = Storage(str(DATA / "eatburn.db"), getattr(config, "DAY_START_HOUR", 4),
+             getattr(config, "ACTIVE_BASELINE", 200))
 nutr = Nutrition(st, DATA / "usda.db")
 llm = LLM(getattr(config, "TEXT_MODEL", "qwen2.5:7b"), getattr(config, "VISION_MODEL", "gemma3:4b"))
 
@@ -310,7 +311,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_draft(update, context, draft)
         return
 
-    if await on_water(update, text):
+    if await on_water(update, text) or await on_watch(update, text):
         return
 
     quick = parse_quick(text)
@@ -537,6 +538,26 @@ GLASS_ML = 250
 _WATER = re.compile(r"^\s*(?P<sign>[+-])?\s*(?:вод[аыу]|💧)\s*(?P<n>\d+(?:[.,]\d+)?)?\s*(?P<u>мл|ml|л|l)?\s*$", re.I)
 
 
+_WATCH = re.compile(r"^\s*(?:⌚|часы|активн\w*|apple watch)(?:\s+за\s+день)?\s*:?\s*(\d{1,4})\s*(?:ккал|kcal)?\s*$", re.I)
+
+
+async def on_watch(update: Update, text: str) -> bool:
+    """Активные ккал за день с Apple Watch: в остаток идёт то, что сверх обычного движения."""
+    m = _WATCH.match(text)
+    if not m:
+        return False
+    kcal = float(m.group(1))
+    st.set_watch(kcal)
+    t = st.day_totals(st.today())
+    extra = max(kcal - st.active_baseline, 0)
+    manual = t["burned"] if t["burned"] > extra else 0
+    note = (f"ручные тренировки сегодня больше ({report.n(manual)}), засчитала их" if manual
+            else f"сверх обычных {report.n(st.active_baseline)} → +{report.n(extra)} в остаток")
+    await update.message.set_reaction("👌")
+    await reply(update, f"⌚ часы: {report.n(kcal)} активных ккал, {note}\n<b>{report.left_line(st, st.today())}</b>")
+    return True
+
+
 async def on_water(update: Update, text: str) -> bool:
     """«вода», «+вода», «💧» — стакан; «вода 500», «вода 0,5 л»; «-вода» — убрать последний."""
     m = _WATER.match(text)
@@ -560,7 +581,7 @@ def entries_keyboard(day: date) -> InlineKeyboardMarkup | None:
     """У каждой записи дня: ✏️ поменять ккал и 🗑 удалить. Внизу — стакан воды."""
     rows = []
     for e in st.entries(day):
-        sign = "−" if e["kind"] == "workout" else ""
+        sign = "−" if e["kind"] in ("workout", "watch") else ""
         label = f"✏️ {e['ts'][11:16]} {e['descr'][:22]} · {sign}{report.n(e['kcal'])}"
         rows.append([InlineKeyboardButton(label, callback_data=f"ed:{e['id']}"),
                      InlineKeyboardButton("🗑", callback_data=f"dl:{e['id']}")])

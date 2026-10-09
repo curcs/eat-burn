@@ -42,8 +42,10 @@ def norm(name: str) -> str:
 
 
 class Storage:
-    def __init__(self, path: str, day_start_hour: int = 4):
-        """day_start_hour: до этого часа еда считается во вчерашний день (перекус в 00:30 — это ещё вечер)."""
+    def __init__(self, path: str, day_start_hour: int = 4, active_baseline: float = 200):
+        """day_start_hour: до этого часа еда считается во вчерашний день (перекус в 00:30 — это ещё вечер).
+        active_baseline: сколько активных ккал за день часы насчитают и в сидячий день — это уже в норме."""
+        self.active_baseline = active_baseline
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
@@ -137,16 +139,29 @@ class Storage:
         return self.db.execute("SELECT * FROM entries ORDER BY ts").fetchall()
 
     def day_totals(self, day: date) -> dict:
+        """burned — большее из ручных тренировок и «часы за день минус обычное движение»:
+        прогулка с часов уже входит в их дневную цифру, дважды не считаем."""
         r = self.db.execute(
             """SELECT
-                 COALESCE(SUM(CASE WHEN kind != 'workout' THEN kcal END), 0) AS eaten,
+                 COALESCE(SUM(CASE WHEN kind NOT IN ('workout', 'watch') THEN kcal END), 0) AS eaten,
                  COALESCE(SUM(CASE WHEN kind = 'workout' THEN kcal END), 0) AS burned,
+                 MAX(CASE WHEN kind = 'watch' THEN kcal END) AS watch,
                  COALESCE(SUM(protein), 0) AS protein,
                  COALESCE(SUM(fat), 0) AS fat,
                  COALESCE(SUM(carbs), 0) AS carbs,
                  COUNT(*) AS n
                FROM entries WHERE day = ?""", (day.isoformat(),)).fetchone()
-        return dict(r)
+        t = dict(r)
+        if t["watch"] is not None:
+            t["burned"] = max(t["burned"], t["watch"] - self.active_baseline, 0)
+        return t
+
+    def set_watch(self, kcal: float, when: datetime | None = None) -> int:
+        """Активные ккал с часов за день: новая цифра заменяет старую за тот же день."""
+        when = when or datetime.now()
+        with self.db:
+            self.db.execute("DELETE FROM entries WHERE kind = 'watch' AND day = ?", (self.day_of(when).isoformat(),))
+        return self.add_entry("watch", "часы за день", kcal, "watch", when=when)
 
     # --- справочник ---
     def get_food(self, name: str) -> sqlite3.Row | None:
@@ -203,7 +218,7 @@ class Storage:
 
     def eaten_on(self, day: date) -> set[str]:
         """Названия того, что уже записано за день, — чтобы не записать одно блюдо дважды."""
-        return {norm(e["descr"]) for e in self.entries(day) if e["kind"] != "workout"}
+        return {norm(e["descr"]) for e in self.entries(day) if e["kind"] not in ("workout", "watch")}
 
     def dishes(self) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM dishes ORDER BY name").fetchall()

@@ -66,6 +66,10 @@ def format_day(st: Storage, day: date, title: str = "сегодня") -> str:
     g = goal(st, day)
     rows = []
     for e in st.entries(day):
+        if e["kind"] == "watch":
+            extra = max(e["kcal"] - st.active_baseline, 0)
+            rows.append(f"⌚ часы: {n(e['kcal'])} активных, сверх обычных {n(extra)}")
+            continue
         sign = "−" if e["kind"] == "workout" else ""
         rows.append(f"{e['ts'][11:16]}  {sign}{n(e['kcal'])}  {esc(e['descr'])}")
     body = "\n".join(rows) or "пока пусто"
@@ -115,9 +119,9 @@ def build_xlsx(st: Storage, path: Path) -> Path:
     ws = wb.active
     ws.title = "Журнал"
     ws.append(["Дата", "Время", "Тип", "Описание", "Ккал", "Белки", "Жиры", "Углеводы", "Источник"])
-    kinds = {"meal": "еда", "quick": "еда", "workout": "тренировка"}
+    kinds = {"meal": "еда", "quick": "еда", "workout": "тренировка", "watch": "часы за день"}
     for e in st.all_entries():
-        kcal = -e["kcal"] if e["kind"] == "workout" else e["kcal"]
+        kcal = -e["kcal"] if e["kind"] in ("workout", "watch") else e["kcal"]
         ws.append([e["day"], e["ts"][11:16], kinds[e["kind"]], e["descr"], round(kcal),
                    *(round(e[k], 1) if e[k] is not None else None for k in ("protein", "fat", "carbs")),
                    e["source"]])

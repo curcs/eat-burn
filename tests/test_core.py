@@ -169,6 +169,21 @@ def test_edit_delete_restore(st):
     assert st.db.execute("SELECT COUNT(*) FROM entry_items WHERE entry_id = ?", (eid,)).fetchone()[0] == 1
 
 
+def test_watch_day(st):
+    day = date(2026, 10, 9)
+    at = datetime(2026, 10, 9, 21, 30)
+    st.add_entry("quick", "рацион", 1300, "manual", when=at)
+    st.add_entry("workout", "прогулка", 150, "manual", when=at)
+    assert st.day_totals(day)["burned"] == 150
+    st.set_watch(412, when=at)          # прогулка внутри: засчитываем 412 − 200, а не 150 + 212
+    assert st.day_totals(day)["burned"] == 212
+    st.set_watch(300, when=at)          # новая цифра за день заменяет старую; ручные 150 больше
+    t = st.day_totals(day)
+    assert (t["burned"], t["eaten"]) == (150, 1300)
+    assert len([e for e in st.entries(day) if e["kind"] == "watch"]) == 1
+    assert "⌚ часы: 300 активных, сверх обычных 100" in report.format_day(st, day)
+
+
 def test_water(st):
     day = date(2026, 10, 9)
     st.add_water(250, datetime(2026, 10, 9, 10))

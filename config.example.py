@@ -19,3 +19,6 @@ REMIND_WEIGHT_DAY = "среда"     # вес раз в неделю, в это�
 REMIND_WEIGHT_AT = "09:00"
 REMIND_FOOD_AT = ["13:30", "17:30", "20:30"]
 REMIND_GAP_HOURS = 4
+
+# Apple Watch: «часы 412» — активные ккал за день. Столько часы насчитают и в сидячий день, это уже в норме
+ACTIVE_BASELINE = 200
