@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import httpx
 import zxingcpp
-from PIL import Image
+from PIL import Image, ImageOps
 
 OFF_PRODUCT = "https://world.openfoodfacts.org/api/v2/product/{}.json"
 HEADERS = {"User-Agent": "eat-burn/0.1 (personal calorie bot)"}
@@ -29,11 +29,33 @@ class Product:
                 "carbs": part(self.carbs)}
 
 
+RETAIL = zxingcpp.BarcodeFormat.EAN13 | zxingcpp.BarcodeFormat.EAN8 | zxingcpp.BarcodeFormat.UPCA | zxingcpp.BarcodeFormat.UPCE
+
+
+def _variants(img: Image.Image):
+    """Telegram ужимает фото до ~1280 px, и мелкий штрихкод в кадре теряет штрихи. Пробуем по очереди:
+    как есть, контрастный ч/б, увеличенный, а потом куски кадра с увеличением (штрихкод где-то в одном из них)."""
+    gray = ImageOps.autocontrast(img.convert("L"))
+    yield img
+    yield gray
+    yield gray.resize((gray.width * 2, gray.height * 2), Image.LANCZOS)
+    for n in (2, 3):
+        tw, th = int(gray.width / n * 1.5), int(gray.height / n * 1.5)  # с перекрытием, чтобы не разрезать код
+        for i in range(n):
+            for j in range(n):
+                x = min(int(i * gray.width / n), gray.width - tw) if tw < gray.width else 0
+                y = min(int(j * gray.height / n), gray.height - th) if th < gray.height else 0
+                tile = gray.crop((x, y, x + tw, y + th))
+                yield tile.resize((tile.width * 3, tile.height * 3), Image.LANCZOS)
+
+
 def decode_barcode(image: bytes) -> str | None:
     img = Image.open(io.BytesIO(image)).convert("RGB")
-    for r in zxingcpp.read_barcodes(img):
-        if r.format.name in ("EAN13", "EAN8", "UPCA", "UPCE") and r.text.isdigit():
-            return r.text
+    for variant in _variants(img):
+        for binarizer in (zxingcpp.Binarizer.LocalAverage, zxingcpp.Binarizer.GlobalHistogram):
+            for r in zxingcpp.read_barcodes(variant, formats=RETAIL, binarizer=binarizer):
+                if r.text.isdigit() and r.valid if hasattr(r, "valid") else r.text.isdigit():
+                    return r.text
     return None
 
 

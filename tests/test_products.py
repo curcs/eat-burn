@@ -42,3 +42,20 @@ def test_label():
 def test_portion():
     p = Product("лимонад", 44, 0, 0, 10.2, 330)
     assert p.portion(330) == {"kcal": 145, "protein": 0, "fat": 0, "carbs": 33.7}
+
+
+def test_barcode_small_in_compressed_photo():
+    """Штрихкод на 15% ширины кадра, кадр ужат как в Telegram и слегка смазан.
+    Один проход zxing по целому кадру его не видит — находится только на увеличенном куске."""
+    from PIL import ImageFilter
+    bg = Image.new("RGB", (3024, 4032), (200, 170, 190))
+    code = Image.fromarray(np.array(zxingcpp.write_barcode(zxingcpp.BarcodeFormat.EAN13, "4860019003043",
+                                                           width=600, height=300))).convert("RGB")
+    bg.paste(code.resize((453, 226)).rotate(8, expand=True, fillcolor="white"), (900, 2000))
+    bg.thumbnail((1280, 1280))
+    bg = bg.filter(ImageFilter.GaussianBlur(0.8))
+    buf = io.BytesIO()
+    bg.save(buf, "JPEG", quality=75)
+    data = buf.getvalue()
+    assert not zxingcpp.read_barcodes(Image.open(io.BytesIO(data)).convert("RGB"))  # одним проходом — нет
+    assert decode_barcode(data) == "4860019003043"

@@ -56,7 +56,7 @@ HELP = """пиши, что съела или сожгла:
 <code>овсянка 60г, банан, ложка мёда</code>: посчитаю по базе и спрошу ✅
 📷 фото тарелки: то же самое, подпись к фото поможет («гречка 200г»)
 📷 скрин или бумажное меню рациона: прочитаю калории
-📷 штрихкод или этикетка «пищевая ценность»: посчитаю по граммам
+📷 штрихкод или этикетка «пищевая ценность»: посчитаю по граммам. штрихкод снимай крупно, а если не читается, отправь фото файлом
 <code>часы 412</code>: активные ккал за день с apple watch
 <code>стакан воды</code>, <code>вода 500</code>: 💧 вода; чай и кофе считаю в воду сами (90% и 80%)
 
@@ -458,8 +458,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
 
 @owner_only
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = await update.message.photo[-1].get_file()
-    image = bytes(await photo.download_as_bytearray())
+    # картинка файлом приходит без сжатия Telegram — штрихкоды и мелкий текст читаются лучше
+    src = update.message.photo[-1] if update.message.photo else update.message.document
+    image = bytes(await (await src.get_file()).download_as_bytearray())
     await update.effective_chat.send_action("typing")
     caption = update.message.caption or ""
     code = await asyncio.to_thread(products.decode_barcode, image)
@@ -995,7 +996,7 @@ def main():
                      ("file", cmd_file), ("remind", cmd_remind), ("tdee", cmd_tdee), ("patterns", cmd_patterns)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(on_callback))
-    app.add_handler(MessageHandler(filters.PHOTO, on_photo))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
