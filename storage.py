@@ -1,6 +1,6 @@
 """SQLite: записи, продукты внутри приёмов пищи, личный справочник, вес, настройки."""
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
@@ -39,11 +39,29 @@ def norm(name: str) -> str:
 
 
 class Storage:
-    def __init__(self, path: str):
+    def __init__(self, path: str, day_start_hour: int = 4):
+        """day_start_hour: до этого часа еда считается во вчерашний день (перекус в 00:30 — это ещё вечер)."""
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.executescript(SCHEMA)
+        self.day_start_hour = day_start_hour
+        if self.get("day_start_hour") != str(day_start_hour):
+            self._recompute_days()
+
+    def day_of(self, when: datetime) -> date:
+        return (when - timedelta(hours=self.day_start_hour)).date()
+
+    def today(self) -> date:
+        return self.day_of(datetime.now())
+
+    def _recompute_days(self):
+        """Граница дня поменялась — пересчитываем день у всех записей по их времени."""
+        rows = self.db.execute("SELECT id, ts FROM entries").fetchall()
+        with self.db:
+            self.db.executemany("UPDATE entries SET day = ? WHERE id = ?",
+                                [(self.day_of(datetime.fromisoformat(r["ts"])).isoformat(), r["id"]) for r in rows])
+        self.set("day_start_hour", self.day_start_hour)
 
     # --- записи ---
     def add_entry(self, kind: str, descr: str, kcal: float, source: str,
@@ -53,7 +71,7 @@ class Storage:
             cur = self.db.execute(
                 "INSERT INTO entries (ts, day, kind, descr, kcal, protein, fat, carbs, source)"
                 " VALUES (?,?,?,?,?,?,?,?,?)",
-                (when.isoformat(timespec="seconds"), when.date().isoformat(), kind, descr,
+                (when.isoformat(timespec="seconds"), self.day_of(when).isoformat(), kind, descr,
                  kcal, protein, fat, carbs, source))
             eid = cur.lastrowid
             self.db.executemany(
@@ -121,7 +139,7 @@ class Storage:
     def add_weight(self, kg: float, day: date | None = None):
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO weights (day, kg) VALUES (?,?)",
-                            ((day or date.today()).isoformat(), kg))
+                            ((day or self.today()).isoformat(), kg))
 
     def last_weight(self) -> float | None:
         r = self.db.execute("SELECT kg FROM weights ORDER BY day DESC LIMIT 1").fetchone()

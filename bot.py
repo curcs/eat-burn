@@ -37,7 +37,7 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", le
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("eat-burn")
 
-st = Storage(str(DATA / "eatburn.db"))
+st = Storage(str(DATA / "eatburn.db"), getattr(config, "DAY_START_HOUR", 4))
 nutr = Nutrition(st, DATA / "usda.db")
 llm = LLM(getattr(config, "TEXT_MODEL", "qwen2.5:7b"), getattr(config, "VISION_MODEL", "gemma3:4b"))
 
@@ -95,7 +95,7 @@ async def show_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: 
                             "напиши число, я запомню")
         return
     ud["awaiting"] = None
-    msg = await reply(update, report.format_draft(draft, st, date.today()), reply_markup=KEYBOARD)
+    msg = await reply(update, report.format_draft(draft, st, st.today()), reply_markup=KEYBOARD)
     ud["draft_msg"] = msg.message_id
 
 
@@ -143,7 +143,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if q.data == "amb_kcal":
             st.add_entry("quick", amb["desc"], amb["kcal"], "manual")
             st.put_dish(amb["desc"], amb["kcal"])
-            await reply(update, f"👌 {amb['kcal']} ккал. {report.left_line(st, date.today())}")
+            await reply(update, f"👌 {amb['kcal']} ккал. {report.left_line(st, st.today())}")
         else:
             await parse_and_show(update, context, llm.parse_text, amb["text"])
         return
@@ -162,7 +162,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      draft.total("protein"), draft.total("fat"), draft.total("carbs"),
                      [i.as_row() for i in draft.items])
         ud.pop("draft"), ud.pop("draft_msg")
-        await q.edit_message_text(q.message.text_html + f"\n\n👌 записала. <b>{report.left_line(st, date.today())}</b>",
+        await q.edit_message_text(q.message.text_html + f"\n\n👌 записала. <b>{report.left_line(st, st.today())}</b>",
                                   parse_mode=ParseMode.HTML)
     elif q.data == "edit":
         ud["awaiting"] = "edit"
@@ -182,7 +182,7 @@ async def show_dish(update: Update, context: ContextTypes.DEFAULT_TYPE, dish):
     ud.pop("draft", None)
     ud["dish"] = {"name": dish["name"], "kcal": dish["kcal"]}
     ud["awaiting"] = "dish"
-    after = report.remaining(st, date.today()) - dish["kcal"]
+    after = report.remaining(st, st.today()) - dish["kcal"]
     tail = f"останется {report.n(after)}" if after >= 0 else f"перебор {report.n(-after)}"
     msg = await reply(update, f"{report.esc(dish['name'])} · <b>{report.n(dish['kcal'])} ккал</b>, как в прошлый раз\n"
                               f"после этого {tail}\n\nдругая цифра? просто пришли число",
@@ -198,7 +198,7 @@ def record_dish(context: ContextTypes.DEFAULT_TYPE, kcal: float) -> str:
     st.add_entry("quick", dish["name"], kcal, "manual")
     if kcal != dish["kcal"]:
         st.put_dish(dish["name"], kcal)
-    return f"👌 записала {report.esc(dish['name'])} {report.n(kcal)} ккал. <b>{report.left_line(st, date.today())}</b>"
+    return f"👌 записала {report.esc(dish['name'])} {report.n(kcal)} ккал. <b>{report.left_line(st, st.today())}</b>"
 
 
 async def on_dish_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -277,7 +277,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if quick.kind == "quick" and quick.desc != "еда":
             st.put_dish(quick.desc, quick.kcal)
         await update.message.set_reaction("👌")
-        await reply(update, report.left_line(st, date.today()))
+        await reply(update, report.left_line(st, st.today()))
         return
 
     dish = st.get_dish(text)
@@ -304,12 +304,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await reply(update, report.format_day(st, date.today()))
+    await reply(update, report.format_day(st, st.today()))
 
 
 @owner_only
 async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await reply(update, report.format_week(st, date.today()))
+    await reply(update, report.format_week(st, st.today()))
 
 
 @owner_only
@@ -319,7 +319,7 @@ async def cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply(update, "удалять нечего")
         return
     await reply(update, f"удалила: {row['day']} {report.esc(row['descr'])} ({round(row['kcal'])} ккал)\n"
-                        f"{report.left_line(st, date.today())}")
+                        f"{report.left_line(st, st.today())}")
 
 
 @owner_only
@@ -345,7 +345,7 @@ async def cmd_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await reply(update, f"норма {report.goal(st)} ккал. поменять: <code>/goal 1300</code> или <code>/goal auto</code>")
         return
-    await reply(update, f"норма {report.goal(st)} ккал. {report.left_line(st, date.today())}")
+    await reply(update, f"норма {report.goal(st)} ккал. {report.left_line(st, st.today())}")
 
 
 @owner_only
@@ -379,7 +379,7 @@ async def cmd_dish_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_file(bot, chat_id: int):
-    path = report.build_xlsx(st, DATA / f"eat-burn-{date.today()}.xlsx")
+    path = report.build_xlsx(st, DATA / f"eat-burn-{st.today()}.xlsx")
     with open(path, "rb") as f:
         await bot.send_document(chat_id, f, filename=path.name)
 
@@ -392,13 +392,13 @@ async def cmd_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- расписание ---
 
 async def job_daily(context: ContextTypes.DEFAULT_TYPE):
-    if st.day_totals(date.today())["n"]:
-        await context.bot.send_message(config.OWNER_ID, report.format_day(st, date.today(), "итог дня"),
+    if st.day_totals(st.today())["n"]:
+        await context.bot.send_message(config.OWNER_ID, report.format_day(st, st.today(), "итог дня"),
                                        parse_mode=ParseMode.HTML)
 
 
 async def job_weekly(context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(config.OWNER_ID, report.format_week(st, date.today()),
+    await context.bot.send_message(config.OWNER_ID, report.format_week(st, st.today()),
                                    parse_mode=ParseMode.HTML)
     await send_file(context.bot, config.OWNER_ID)
 

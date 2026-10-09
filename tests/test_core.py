@@ -144,6 +144,18 @@ def test_dishes(st):
     assert st.delete_dish("ЦЕЗАРЬ жан-жак") and not st.dishes()
 
 
+def test_day_starts_at_4am(tmp_path):
+    path = str(tmp_path / "d.db")
+    old = Storage(path, day_start_hour=0)  # как было раньше: день по календарю
+    old.add_entry("quick", "лимонад", 100, "manual", when=datetime(2026, 10, 8, 0, 18))
+    assert old.entries(date(2026, 10, 8))
+
+    st = Storage(path, day_start_hour=4)  # старые записи пересчитываются при старте
+    assert st.entries(date(2026, 10, 7))[0]["descr"] == "лимонад"
+    st.add_entry("quick", "завтрак", 300, "manual", when=datetime(2026, 10, 8, 4, 0))
+    assert st.day_totals(date(2026, 10, 8))["eaten"] == 300
+
+
 def test_undo(st):
     st.add_entry("quick", "a", 500, "manual")
     st.add_entry("meal", "b", 300, "text", items=[{"name": "b", "grams": 100, "kcal": 300}])

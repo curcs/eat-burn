@@ -10,3 +10,6 @@ SEX = "f"
 # модели Ollama
 TEXT_MODEL = "qwen2.5:7b"
 VISION_MODEL = "gemma3:4b"
+
+# день начинается в 4 утра: перекус в 00:30 считается во вчерашний день
+DAY_START_HOUR = 4
