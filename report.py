@@ -231,6 +231,31 @@ def left_line(st: Storage, day: date) -> str:
     return balance_text(st, day)
 
 
+# MET: быстрая ходьба ~5 км/ч и обычная силовая средней интенсивности (Compendium of Physical Activities)
+ACTIVITIES = [("быстрой ходьбы", 3.5), ("силовой", 5.0)]
+
+
+def minutes_for(kcal: float, met: float, kg: float) -> int:
+    """Минуты, чтобы потратить kcal сверх покоя: (MET − 1) × 3,5 × вес / 200 ккал в минуту. Округляем до 5."""
+    per_min = (met - 1) * 3.5 * kg / 200
+    return int(5 * round(kcal / per_min / 5))
+
+
+def hm(minutes: int) -> str:
+    h, m = divmod(minutes, 60)
+    return f"{h} ч {m} мин" if h and m else f"{h} ч" if h else f"{m} мин"
+
+
+def activity_hint(st: Storage, day: date) -> str:
+    """Справка, сколько движения вернёт день в норму. Не задание: проще ровный следующий день."""
+    kind, over_goal, _ = level(st, day)
+    if kind == "норма":
+        return ""
+    kg = st.last_weight() or float(st.get("start_weight", 60))
+    options = " или ".join(f"~{hm(minutes_for(over_goal, met, kg))} {name}" for name, met in ACTIVITIES)
+    return f"до нормы это {options}. а можно просто завтра ровный день, так проще 🙂"
+
+
 def format_draft(d: Draft, st: Storage, day: date) -> str:
     lines = []
     for i in d.items:
@@ -259,7 +284,7 @@ def format_day(st: Storage, day: date, title: str = "сегодня") -> str:
     body = "\n".join(rows) or "пока пусто"
     summary = [f"съедено {n(t['eaten'])} · тренировки +{n(t['burned'])} · норма {n(g)}",
                f"бжу {n(t['protein'])}/{n(t['fat'])}/{n(t['carbs'])}" if SHOW_PFC else "",
-               water_line(st, day), f"<b>{left_line(st, day)}</b>"]
+               water_line(st, day), f"<b>{left_line(st, day)}</b>", activity_hint(st, day)]
     return f"<b>{title}</b>\n{body}\n\n" + "\n".join(s for s in summary if s)
 
 

@@ -310,3 +310,14 @@ def test_three_levels(st):
     kind, over_goal, over_maint = report.level(st, day)
     assert kind == "перебор" and round(over_maint) == round(1743 - maint)
     assert report.left_line(st, day).startswith("🔺 перебор: на ")
+
+
+def test_activity_hint(st):
+    assert report.minutes_for(254, 3.5, 58) == 100   # ходьба: 2,54 ккал/мин сверх покоя
+    assert report.minutes_for(203, 5.0, 58) == 50    # силовая: 4,06 ккал/мин
+    assert report.hm(135) == "2 ч 15 мин" and report.hm(60) == "1 ч" and report.hm(45) == "45 мин"
+    day = date(2026, 10, 9)
+    st.add_entry("quick", "рацион", 1300, "manual", when=datetime(2026, 10, 9, 12))
+    assert report.activity_hint(st, day) == ""
+    st.add_entry("quick", "блинчики", 294, "manual", when=datetime(2026, 10, 9, 13))
+    assert "быстрой ходьбы" in report.activity_hint(st, day) and "силовой" in report.format_day(st, day)
