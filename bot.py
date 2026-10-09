@@ -150,6 +150,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data.startswith(("ed:", "dl:")) or q.data == "un":
         await on_entry_callback(update, context)
         return
+    if q.data == "wt":
+        st.add_water(GLASS_ML)
+        await q.answer(f"💧 +{GLASS_ML} мл, сегодня {st.water_on(st.today()) / 1000:.2f} л".replace(".", ","))
+        return
     if q.data.startswith("amb_"):
         amb = ud.pop("amb", None)
         await q.answer()
@@ -304,6 +308,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     item.per100.match = "со слов, запомнила"
         await asyncio.to_thread(nutr.fill, draft)
         await show_draft(update, context, draft)
+        return
+
+    if await on_water(update, text):
         return
 
     quick = parse_quick(text)
@@ -526,15 +533,39 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply(update, f"норма сейчас {report.goal(st)} ккал в день\n\n" + HELP)
 
 
+GLASS_ML = 250
+_WATER = re.compile(r"^\s*(?P<sign>[+-])?\s*(?:вод[аыу]|💧)\s*(?P<n>\d+(?:[.,]\d+)?)?\s*(?P<u>мл|ml|л|l)?\s*$", re.I)
+
+
+async def on_water(update: Update, text: str) -> bool:
+    """«вода», «+вода», «💧» — стакан; «вода 500», «вода 0,5 л»; «-вода» — убрать последний."""
+    m = _WATER.match(text)
+    if not m:
+        return False
+    day = st.today()
+    if m.group("sign") == "-":
+        ml = st.remove_last_water(day)
+        note = f"убрала {report.n(ml)} мл" if ml else "сегодня воды ещё не было"
+    else:
+        ml = float(m.group("n").replace(",", ".")) if m.group("n") else GLASS_ML
+        if m.group("u") in ("л", "l") or (m.group("n") and ml < 10):
+            ml *= 1000
+        st.add_water(ml)
+        note = f"+{report.n(ml)} мл"
+    await reply(update, f"💧 {note}, сегодня {st.water_on(day) / 1000:.2f} л".replace(".", ","))
+    return True
+
+
 def entries_keyboard(day: date) -> InlineKeyboardMarkup | None:
-    """У каждой записи дня: ✏️ поменять ккал и 🗑 удалить."""
+    """У каждой записи дня: ✏️ поменять ккал и 🗑 удалить. Внизу — стакан воды."""
     rows = []
     for e in st.entries(day):
         sign = "−" if e["kind"] == "workout" else ""
         label = f"✏️ {e['ts'][11:16]} {e['descr'][:22]} · {sign}{report.n(e['kcal'])}"
         rows.append([InlineKeyboardButton(label, callback_data=f"ed:{e['id']}"),
                      InlineKeyboardButton("🗑", callback_data=f"dl:{e['id']}")])
-    return InlineKeyboardMarkup(rows) if rows else None
+    rows.append([InlineKeyboardButton(f"💧 +{GLASS_ML} мл", callback_data="wt")])
+    return InlineKeyboardMarkup(rows)
 
 
 @owner_only

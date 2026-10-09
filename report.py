@@ -71,8 +71,13 @@ def format_day(st: Storage, day: date, title: str = "сегодня") -> str:
     body = "\n".join(rows) or "пока пусто"
     return (f"<b>{title}</b>\n{body}\n\n"
             f"съедено {n(t['eaten'])} · тренировки +{n(t['burned'])} · норма {n(g)}\n"
-            f"бжу {n(t['protein'])}/{n(t['fat'])}/{n(t['carbs'])}\n"
+            f"бжу {n(t['protein'])}/{n(t['fat'])}/{n(t['carbs'])}{water_line(st, day)}\n"
             f"<b>{left_line(st, day)}</b>")
+
+
+def water_line(st: Storage, day: date) -> str:
+    ml = st.water_on(day)
+    return f" · 💧 {ml / 1000:.2f} л".replace(".", ",") if ml else ""
 
 
 def format_week(st: Storage, end: date) -> str:

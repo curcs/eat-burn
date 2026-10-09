@@ -169,6 +169,16 @@ def test_edit_delete_restore(st):
     assert st.db.execute("SELECT COUNT(*) FROM entry_items WHERE entry_id = ?", (eid,)).fetchone()[0] == 1
 
 
+def test_water(st):
+    day = date(2026, 10, 9)
+    st.add_water(250, datetime(2026, 10, 9, 10))
+    st.add_water(500, datetime(2026, 10, 9, 13))
+    st.add_water(250, datetime(2026, 10, 10, 2))  # до 4 утра — ещё вчера
+    assert st.water_on(day) == 1000
+    assert st.remove_last_water(day) == 250 and st.water_on(day) == 750
+    assert "💧 0,75 л" in report.format_day(st, day)
+
+
 def test_undo(st):
     st.add_entry("quick", "a", 500, "manual")
     st.add_entry("meal", "b", 300, "text", items=[{"name": "b", "grams": 100, "kcal": 300}])

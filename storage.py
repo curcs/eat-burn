@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS dishes (
     kcal REAL NOT NULL,          -- на порцию
     updated TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS water (
+    id INTEGER PRIMARY KEY, ts TEXT NOT NULL, day TEXT NOT NULL, ml REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS weights (day TEXT PRIMARY KEY, kg REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
@@ -214,6 +217,25 @@ class Storage:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO weights (day, kg) VALUES (?,?)",
                             ((day or self.today()).isoformat(), kg))
+
+    # --- вода ---
+    def add_water(self, ml: float, when: datetime | None = None):
+        when = when or datetime.now()
+        with self.db:
+            self.db.execute("INSERT INTO water (ts, day, ml) VALUES (?,?,?)",
+                            (when.isoformat(timespec="seconds"), self.day_of(when).isoformat(), ml))
+
+    def remove_last_water(self, day: date) -> float | None:
+        r = self.db.execute("SELECT id, ml FROM water WHERE day = ? ORDER BY id DESC LIMIT 1",
+                            (day.isoformat(),)).fetchone()
+        if r:
+            with self.db:
+                self.db.execute("DELETE FROM water WHERE id = ?", (r["id"],))
+        return r["ml"] if r else None
+
+    def water_on(self, day: date) -> float:
+        return self.db.execute("SELECT COALESCE(SUM(ml), 0) FROM water WHERE day = ?",
+                               (day.isoformat(),)).fetchone()[0]
 
     def weighed_on(self, day: date) -> bool:
         return self.db.execute("SELECT 1 FROM weights WHERE day = ?", (day.isoformat(),)).fetchone() is not None
