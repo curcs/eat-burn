@@ -288,3 +288,11 @@ def test_water_phrases():
         assert bot.water_amount(text) == ("+", ml), text
     assert bot.water_amount("-вода") == ("-", None)
     assert bot.water_amount("стакан кефира") is None and bot.water_amount("водка") is None
+
+
+def test_flavoured_water_is_water():
+    import bot
+    assert bot.water_amount("боржоми аромати") == ("+", 200)
+    assert bot.water_amount("аромати 500") == ("+", 500)
+    assert bot.water_amount("минералка") == ("+", 200)
+    assert bot.water_amount("лимонад боржоми") is None

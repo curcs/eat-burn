@@ -646,7 +646,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 GLASS_ML = 200
 WATER_BUTTONS = [("стакан", 200), ("бутылка", 330), ("бутылка", 500)]
-_WATER = re.compile(r"^\s*(?P<sign>[+-])?\s*(?:вод[аыу]|💧)\s*(?P<n>\d+(?:[.,]\d+)?)?\s*(?P<u>мл|ml|л|l)?\s*$", re.I)
+_WATER = re.compile(r"^\s*(?P<sign>[+-])?\s*(?:вод[аыу]|💧|(?:боржоми\s+)?аромати|минералк\w*|минеральн\w*\s+вод\w*)\s*(?P<n>\d+(?:[.,]\d+)?)?\s*(?P<u>мл|ml|л|l)?\s*$", re.I)
 # «стакан воды», «2 стакана воды», «полбутылки воды», «кружка воды»
 _WATER_PORTION = re.compile(r"^\s*(?:выпила\s+)?(?P<count>\d+|один|одну|два|две|три|пол)?\s*-?\s*"
                             r"(?P<what>стакан\w*|кружк\w*|бутыл\w*|бутылочк\w*)\s+воды\s*$", re.I)
