@@ -265,3 +265,26 @@ def test_draft_uses_dish_portion(st, usda):
     assert sanpe.name == "санпелегрино гранат апельсин" and sanpe.kcal == 125 and sanpe.part("carbs") == 30.4
     assert banana.portion is None and round(banana.kcal) == 107
     assert "санпелегрино гранат апельсин порция · 125 ккал" in report.format_draft(d, st, date(2026, 10, 9))
+
+
+def test_hydration_tea_coffee(st):
+    day = date(2026, 10, 9)
+    at = datetime(2026, 10, 9, 12)
+    st.add_water(400, at)
+    st.add_entry("meal", "чай чёрный 500г", 0, "text", items=[{"name": "чай чёрный", "grams": 500, "kcal": 0}], when=at)
+    st.add_entry("quick", "капучино на овсяном", 135, "manual", when=at)   # без объёма: чашка 250
+    st.add_entry("meal", "эспрессо 30г", 1, "text", items=[{"name": "эспрессо", "grams": 30, "kcal": 1}], when=at)
+    st.add_entry("quick", "чак-чак", 300, "manual", when=at)               # не напиток
+    h = report.hydration(st, day)
+    assert h["water"] == 400 and h["drinks"] == 0.9 * 500 + 0.8 * 250 + 0.8 * 30
+    assert "💧 1,07 л (из них чай и кофе 0,67 л)" in report.format_day(st, day)
+
+
+def test_water_phrases():
+    import bot
+    cases = {"стакан воды": 200, "2 стакана воды": 400, "Выпила стакан воды.": 200, "полбутылки воды": 250,
+             "бутылка воды": 500, "кружка воды": 300, "вода": 200, "вода 0,5 л": 500, "💧": 200}
+    for text, ml in cases.items():
+        assert bot.water_amount(text) == ("+", ml), text
+    assert bot.water_amount("-вода") == ("-", None)
+    assert bot.water_amount("стакан кефира") is None and bot.water_amount("водка") is None

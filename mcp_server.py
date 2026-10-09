@@ -58,7 +58,7 @@ def daily_totals(days: int = 14) -> list[dict]:
         t = st.day_totals(d)
         out.append({"day": str(d), "eaten": round(t["eaten"]), "burned": round(t["burned"]),
                     "goal": report.goal(st, d), "remaining": report.remaining(st, d),
-                    "protein": round(t["protein"]), "water_ml": round(st.water_on(d)), "entries": t["n"]})
+                    "protein": round(t["protein"]), "water_ml": round(report.hydration(st, d)["total"]), "entries": t["n"]})
     return out
 
 

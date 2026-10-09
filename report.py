@@ -1,5 +1,6 @@
 """Тексты сводок и xlsx."""
 import html
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -83,6 +84,41 @@ def format_adaptive(st: Storage, end: date) -> str:
             "поставить: <code>/goal adapt</code>")
 
 
+# чай и кофе идут в воду частично: (как называется, доля воды, объём чашки, если в записи его нет)
+WATER_FROM_DRINKS = [
+    (r"эспрессо|espresso", 0.8, 30),
+    (r"кофе|капучино|латте|раф\b|американо|флэт|coffee", 0.8, 250),
+    (r"\bча[йюя]\b|чаю|\btea\b", 0.9, 250),
+]
+
+
+def _drink_water(name: str, grams: float | None) -> float:
+    for pattern, share, cup in WATER_FROM_DRINKS:
+        if re.search(pattern, name, re.I):
+            return share * (grams or cup)
+    return 0.0
+
+
+def hydration(st: Storage, day: date) -> dict:
+    """Вода за день: выпитая вода + доля из чая и кофе (объём из записи, иначе стандартная чашка)."""
+    from_drinks = 0.0
+    for e in st.entries(day):
+        if e["kind"] in ("workout", "watch"):
+            continue
+        items = st.db.execute("SELECT name, grams FROM entry_items WHERE entry_id = ?", (e["id"],)).fetchall()
+        if items:  # «кускус 150г, чай 300г» — смотрим каждый продукт
+            from_drinks += sum(_drink_water(i["name"], i["grams"]) for i in items)
+        else:
+            m = re.search(r"(\d+)\s*(?:г|мл|ml)\b", e["descr"])
+            from_drinks += _drink_water(e["descr"], float(m.group(1)) if m else None)
+    plain = st.water_on(day)
+    return {"water": plain, "drinks": from_drinks, "total": plain + from_drinks}
+
+
+def liters(ml: float) -> str:
+    return f"{ml / 1000:.2f} л".replace(".", ",")
+
+
 SWEET_DRINKS = ("лимонад", "санпел", "sanpell", "боржоми", "кола", "cola", "сок ", "спрайт", "фанта")
 
 
@@ -94,7 +130,7 @@ def day_factors(st: Storage, day: date) -> dict:
                  if int(e["ts"][11:13]) >= st.day_start_hour), default=None)
     late = sum(e["kcal"] for e in food if int(e["ts"][11:13]) >= 21 or int(e["ts"][11:13]) < st.day_start_hour)
     drinks = sum(e["kcal"] for e in food if any(w in e["descr"].lower() for w in SWEET_DRINKS))
-    return {"сладкие напитки, ккал": drinks, "первая еда, час": first, "вода, л": st.water_on(day) / 1000,
+    return {"сладкие напитки, ккал": drinks, "первая еда, час": first, "вода, л": hydration(st, day)["total"] / 1000,
             "углеводы, г": t["carbs"], "белок, г": t["protein"], "всего съедено, ккал": t["eaten"],
             "после 21:00, ккал": late, "активность, ккал": t["burned"]}
 
@@ -202,8 +238,11 @@ def format_day(st: Storage, day: date, title: str = "сегодня") -> str:
 
 
 def water_line(st: Storage, day: date) -> str:
-    ml = st.water_on(day)
-    return f" · 💧 {ml / 1000:.2f} л".replace(".", ",") if ml else ""
+    h = hydration(st, day)
+    if not h["total"]:
+        return ""
+    tea = f" (из них чай и кофе {liters(h['drinks'])})" if h["drinks"] else ""
+    return f"\n💧 {liters(h['total'])}{tea}"
 
 
 def format_week(st: Storage, end: date) -> str:

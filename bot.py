@@ -57,7 +57,7 @@ HELP = """пиши, что съела или сожгла:
 📷 скрин или бумажное меню рациона: прочитаю ккал и бжу
 📷 штрихкод или этикетка «пищевая ценность»: посчитаю по граммам
 <code>часы 412</code>: активные ккал за день с apple watch
-<code>вода</code> или <code>вода 500</code>: 💧 стакан или сколько выпила
+<code>стакан воды</code>, <code>вода 500</code>: 💧 вода; чай и кофе считаю в воду сами (90% и 80%)
 
 граммы пиши с «г»: <code>творог 150г</code>. просто <code>150 творог</code> я пойму как 150 ккал
 
@@ -162,9 +162,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data.startswith("sy:"):
         await on_symptom_callback(update, context)
         return
-    if q.data == "wt":
-        st.add_water(GLASS_ML)
-        await q.answer(f"💧 +{GLASS_ML} мл, сегодня {st.water_on(st.today()) / 1000:.2f} л".replace(".", ","))
+    if q.data.startswith("wt"):
+        ml = float(q.data[3:]) if q.data.startswith("wt:") else GLASS_ML
+        st.add_water(ml)
+        await q.answer(f"💧 +{report.n(ml)} мл, {water_today_text()}")
         return
     if q.data.startswith("amb_"):
         amb = ud.pop("amb", None)
@@ -642,8 +643,40 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply(update, f"норма сейчас {report.goal(st)} ккал в день\n\n" + HELP)
 
 
-GLASS_ML = 250
+GLASS_ML = 200
+WATER_BUTTONS = [("стакан", 200), ("бутылка", 330), ("бутылка", 500)]
 _WATER = re.compile(r"^\s*(?P<sign>[+-])?\s*(?:вод[аыу]|💧)\s*(?P<n>\d+(?:[.,]\d+)?)?\s*(?P<u>мл|ml|л|l)?\s*$", re.I)
+# «стакан воды», «2 стакана воды», «полбутылки воды», «кружка воды»
+_WATER_PORTION = re.compile(r"^\s*(?:выпила\s+)?(?P<count>\d+|один|одну|два|две|три|пол)?\s*-?\s*"
+                            r"(?P<what>стакан\w*|кружк\w*|бутыл\w*|бутылочк\w*)\s+воды\s*$", re.I)
+PORTION_ML = {"стакан": 200, "кружк": 300, "бутыл": 500}
+COUNT_WORDS = {"один": 1, "одну": 1, "два": 2, "две": 2, "три": 3, "пол": 0.5}
+
+
+def water_amount(text: str) -> tuple[str, float | None] | None:
+    """(«+», мл) или («-», None); None — это не про воду."""
+    text = text.strip(" .!")  # из голосового приходит «Выпила стакан воды.»
+    m = _WATER_PORTION.match(text)
+    if m:
+        c = m.group("count")
+        count = float(c) if c and c.isdigit() else COUNT_WORDS.get((c or "").lower(), 1)
+        size = next(ml for k, ml in PORTION_ML.items() if m.group("what").lower().startswith(k))
+        return "+", count * size
+    m = _WATER.match(text)
+    if not m:
+        return None
+    if m.group("sign") == "-":
+        return "-", None
+    ml = float(m.group("n").replace(",", ".")) if m.group("n") else GLASS_ML
+    if m.group("u") in ("л", "l") or (m.group("n") and ml < 10):
+        ml *= 1000
+    return "+", ml
+
+
+def water_today_text() -> str:
+    h = report.hydration(st, st.today())
+    tea = f", из них чай и кофе {report.liters(h['drinks'])}" if h["drinks"] else ""
+    return f"сегодня {report.liters(h['total'])}{tea}"
 
 
 _WATCH = re.compile(r"^\s*(?:⌚|часы|активн\w*|apple watch)(?:\s+за\s+день)?\s*:?\s*(\d{1,4})\s*(?:ккал|kcal)?\s*$", re.I)
@@ -667,22 +700,24 @@ async def on_watch(update: Update, text: str) -> bool:
 
 
 async def on_water(update: Update, text: str) -> bool:
-    """«вода», «+вода», «💧» — стакан; «вода 500», «вода 0,5 л»; «-вода» — убрать последний."""
-    m = _WATER.match(text)
-    if not m:
+    """«вода», «+вода», «💧» — стакан 200 мл; «вода 500», «вода 0,5 л», «2 стакана воды»; «-вода» — убрать последний."""
+    amount = water_amount(text)
+    if amount is None:
         return False
-    day = st.today()
-    if m.group("sign") == "-":
-        ml = st.remove_last_water(day)
+    sign, ml = amount
+    if sign == "-":
+        ml = st.remove_last_water(st.today())
         note = f"убрала {report.n(ml)} мл" if ml else "сегодня воды ещё не было"
     else:
-        ml = float(m.group("n").replace(",", ".")) if m.group("n") else GLASS_ML
-        if m.group("u") in ("л", "l") or (m.group("n") and ml < 10):
-            ml *= 1000
         st.add_water(ml)
         note = f"+{report.n(ml)} мл"
-    await reply(update, f"💧 {note}, сегодня {st.water_on(day) / 1000:.2f} л".replace(".", ","))
+    await reply(update, f"💧 {note}, {water_today_text()}", reply_markup=water_keyboard())
     return True
+
+
+def water_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(f"💧 {name} {ml}", callback_data=f"wt:{ml}")
+                                  for name, ml in WATER_BUTTONS]])
 
 
 def entries_keyboard(day: date) -> InlineKeyboardMarkup | None:
@@ -693,7 +728,7 @@ def entries_keyboard(day: date) -> InlineKeyboardMarkup | None:
         label = f"✏️ {e['ts'][11:16]} {e['descr'][:22]} · {sign}{report.n(e['kcal'])}"
         rows.append([InlineKeyboardButton(label, callback_data=f"ed:{e['id']}"),
                      InlineKeyboardButton("🗑", callback_data=f"dl:{e['id']}")])
-    rows.append([InlineKeyboardButton(f"💧 +{GLASS_ML} мл", callback_data="wt")])
+    rows += water_keyboard().inline_keyboard
     return InlineKeyboardMarkup(rows)
 
 
