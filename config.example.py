@@ -13,3 +13,8 @@ VISION_MODEL = "gemma3:4b"
 
 # день начинается в 4 утра: перекус в 00:30 считается во вчерашний день
 DAY_START_HOUR = 4
+
+# напоминания: вес утром, еда — если REMIND_GAP_HOURS часов ничего не записано
+REMIND_WEIGHT_AT = "09:00"
+REMIND_FOOD_AT = ["13:30", "17:30", "20:30"]
+REMIND_GAP_HOURS = 4

@@ -183,6 +183,13 @@ class Storage:
             self.db.execute("INSERT OR REPLACE INTO weights (day, kg) VALUES (?,?)",
                             ((day or self.today()).isoformat(), kg))
 
+    def weighed_on(self, day: date) -> bool:
+        return self.db.execute("SELECT 1 FROM weights WHERE day = ?", (day.isoformat(),)).fetchone() is not None
+
+    def last_entry_time(self) -> datetime | None:
+        r = self.db.execute("SELECT ts FROM entries ORDER BY ts DESC LIMIT 1").fetchone()
+        return datetime.fromisoformat(r["ts"]) if r else None
+
     def last_weight(self) -> float | None:
         r = self.db.execute("SELECT kg FROM weights ORDER BY day DESC LIMIT 1").fetchone()
         return r["kg"] if r else None

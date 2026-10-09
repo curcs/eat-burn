@@ -13,7 +13,7 @@ eat-burn: телеграм-бот подсчёта калорий с дневн�
 import asyncio
 import logging
 import re
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -63,6 +63,7 @@ HELP = """пиши, что съела или сожгла:
 /food чак-чак 450: ккал на 100 г в мой справочник
 /f лимонад: найти блюдо в справочнике и записать в одно нажатие (/f без слов: самое частое)
 /dishes: мои блюда. <code>450 цезарь жан-жак</code> запоминается, потом хватит <code>цезарь жан-жак</code>
+/remind: напоминания про вес и еду (/remind off выключить)
 /file: табличка"""
 
 
@@ -244,6 +245,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     ud = context.user_data
     awaiting = ud.get("awaiting")
+
+    if awaiting == "weight" and await on_weight_reply(update, context, text):
+        return
 
     if awaiting == "per100" and ud.get("draft"):
         m = re.match(r"^\s*(\d+(?:[.,]\d+)?)", text)
@@ -495,12 +499,16 @@ async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply(update, f"в справочнике нет «{report.esc(query)}». "
                             "запиши один раз с цифрой, например <code>100 лимонад</code>, и я запомню")
         return
-    found = [dish_dict(r) for r in rows]
-    context.user_data["found"] = found
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"{d['name'][:34]} · {report.n(d['kcal'])}",
-                                                     callback_data=f"fd:{k}")] for k, d in enumerate(found)])
     title = f"нашла по «{report.esc(query)}»" if query else "чаще всего записываешь"
-    await reply(update, f"{title}. нажми, чтобы записать:", reply_markup=kb)
+    await reply(update, f"{title}. нажми, чтобы записать:", reply_markup=found_keyboard(context.user_data, rows))
+
+
+def found_keyboard(user_data: dict, rows) -> InlineKeyboardMarkup:
+    """Кнопки «записать одним нажатием»; сами блюда запоминаем в user_data для on_find_callback."""
+    found = [dish_dict(r) for r in rows]
+    user_data["found"] = found
+    return InlineKeyboardMarkup([[InlineKeyboardButton(f"{d['name'][:34]} · {report.n(d['kcal'])}",
+                                                       callback_data=f"fd:{k}")] for k, d in enumerate(found)])
 
 
 async def on_find_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -538,7 +546,71 @@ async def cmd_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_file(context.bot, update.effective_chat.id)
 
 
+@owner_only
+async def cmd_remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    arg = (context.args or [""])[0]
+    if arg in ("on", "off"):
+        st.set("remind", arg)
+    state = "включены" if st.get("remind", "on") == "on" else "выключены"
+    await reply(update, f"напоминания {state}: вес в {WEIGHT_AT:%H:%M}, еда в "
+                        f"{', '.join(f'{t:%H:%M}' for t in FOOD_AT)}, если {NUDGE_GAP_H} ч ничего не записывала\n"
+                        "<code>/remind off</code> выключить, <code>/remind on</code> включить")
+
+
 # --- расписание ---
+
+def parse_hhmm(s: str, tz) -> time:
+    h, m = s.split(":")
+    return time(int(h), int(m), tzinfo=tz)
+
+
+TZ = datetime.now().astimezone().tzinfo
+WEIGHT_AT = parse_hhmm(getattr(config, "REMIND_WEIGHT_AT", "09:00"), TZ)
+FOOD_AT = [parse_hhmm(s, TZ) for s in getattr(config, "REMIND_FOOD_AT", ["13:30", "17:30", "20:30"])]
+NUDGE_GAP_H = getattr(config, "REMIND_GAP_HOURS", 4)
+WEIGHT_REPLY_UNTIL_H = 12  # до полудня число после напоминания — это вес
+
+
+async def job_weight(context: ContextTypes.DEFAULT_TYPE):
+    if st.get("remind", "on") != "on" or st.weighed_on(st.today()):
+        return
+    context.application.user_data[config.OWNER_ID]["awaiting"] = "weight"
+    last = st.last_weight()
+    hint = f" (в прошлый раз {last} кг)" if last else ""
+    await context.bot.send_message(config.OWNER_ID, f"доброе утро ☀️ запиши вес натощак{hint}\n"
+                                                    "просто пришли число, например <code>57.5</code>",
+                                   parse_mode=ParseMode.HTML)
+
+
+async def job_nudge(context: ContextTypes.DEFAULT_TYPE):
+    """Напоминаем, только если давно ничего не записывала — когда всё ведёшь, бот молчит."""
+    last = st.last_entry_time()
+    if st.get("remind", "on") != "on" or (last and datetime.now() - last < timedelta(hours=NUDGE_GAP_H)):
+        return
+    since = f"с {last:%H:%M} " if last and last.date() == datetime.now().date() else "сегодня "
+    ud = context.application.user_data[config.OWNER_ID]
+    await context.bot.send_message(
+        config.OWNER_ID,
+        f"{since}ничего не записано. что ела или была активность? 🍽\n"
+        f"{report.left_line(st, st.today())}\n\nчастое ниже, остальное просто напиши",
+        reply_markup=found_keyboard(ud, st.search_dishes(limit=5)))
+
+
+async def on_weight_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """Ответ числом на утреннее напоминание о весе. False — это не вес, обрабатываем как обычно."""
+    context.user_data["awaiting"] = None
+    m = re.fullmatch(r"\s*(\d{2,3}(?:[.,]\d{1,2})?)\s*(?:кг|kg)?\s*", text)
+    if not m or datetime.now().hour >= WEIGHT_REPLY_UNTIL_H:
+        return False
+    kg = float(m.group(1).replace(",", "."))
+    if not 30 <= kg <= 150:
+        return False
+    st.add_weight(kg, st.today())
+    w = st.weights()
+    trend = f", было {w[-2]['kg']}" if len(w) >= 2 else ""
+    await update.message.set_reaction("👌")
+    await reply(update, f"записала {kg} кг{trend}. норма {report.goal(st)} ккал")
+    return True
 
 async def job_daily(context: ContextTypes.DEFAULT_TYPE):
     if st.day_totals(st.today())["n"]:
@@ -557,7 +629,7 @@ def main():
     for name, fn in [("start", cmd_start), ("help", cmd_start), ("today", cmd_today), ("week", cmd_week),
                      ("undo", cmd_undo), ("weight", cmd_weight), ("goal", cmd_goal), ("food", cmd_food), ("dishes", cmd_dishes), ("dish_del", cmd_dish_del),
                      ("f", cmd_find), ("find", cmd_find),
-                     ("file", cmd_file)]:
+                     ("file", cmd_file), ("remind", cmd_remind)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
@@ -566,6 +638,9 @@ def main():
     tz = datetime.now().astimezone().tzinfo
     app.job_queue.run_daily(job_daily, time(22, 0, tzinfo=tz))
     app.job_queue.run_daily(job_weekly, time(21, 0, tzinfo=tz), days=(0,))  # 0 = воскресенье в PTB
+    app.job_queue.run_daily(job_weight, WEIGHT_AT)
+    for t in FOOD_AT:
+        app.job_queue.run_daily(job_nudge, t)
     log.info("eat-burn запущен, норма %s ккал", report.goal(st))
     app.run_polling()
 
