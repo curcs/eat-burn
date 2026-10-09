@@ -552,7 +552,7 @@ async def cmd_remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if arg in ("on", "off"):
         st.set("remind", arg)
     state = "включены" if st.get("remind", "on") == "on" else "выключены"
-    await reply(update, f"напоминания {state}: вес в {WEIGHT_AT:%H:%M}, еда в "
+    await reply(update, f"напоминания {state}: вес раз в неделю ({WEEKDAYS_RU[WEIGHT_DAY]}, {WEIGHT_AT:%H:%M}), еда в "
                         f"{', '.join(f'{t:%H:%M}' for t in FOOD_AT)}, если {NUDGE_GAP_H} ч ничего не записывала\n"
                         "<code>/remind off</code> выключить, <code>/remind on</code> включить")
 
@@ -566,6 +566,9 @@ def parse_hhmm(s: str, tz) -> time:
 
 TZ = datetime.now().astimezone().tzinfo
 WEIGHT_AT = parse_hhmm(getattr(config, "REMIND_WEIGHT_AT", "09:00"), TZ)
+# вес раз в неделю: каждый день он скачет на 0,5–2 кг от воды и соли, а динамику видно и по неделям
+WEEKDAYS_RU = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+WEIGHT_DAY = WEEKDAYS_RU.index(getattr(config, "REMIND_WEIGHT_DAY", "среда"))
 FOOD_AT = [parse_hhmm(s, TZ) for s in getattr(config, "REMIND_FOOD_AT", ["13:30", "17:30", "20:30"])]
 NUDGE_GAP_H = getattr(config, "REMIND_GAP_HOURS", 4)
 WEIGHT_REPLY_UNTIL_H = 12  # до полудня число после напоминания — это вес
@@ -574,10 +577,13 @@ WEIGHT_REPLY_UNTIL_H = 12  # до полудня число после напо�
 async def job_weight(context: ContextTypes.DEFAULT_TYPE):
     if st.get("remind", "on") != "on" or st.weighed_on(st.today()):
         return
+    last_w = st.weights()
+    if last_w and (st.today() - date.fromisoformat(last_w[-1]["day"])).days < 6:
+        return  # на этой неделе уже взвешивалась
     context.application.user_data[config.OWNER_ID]["awaiting"] = "weight"
     last = st.last_weight()
     hint = f" (в прошлый раз {last} кг)" if last else ""
-    await context.bot.send_message(config.OWNER_ID, f"доброе утро ☀️ запиши вес натощак{hint}\n"
+    await context.bot.send_message(config.OWNER_ID, f"доброе утро ☀️ сегодня день взвешивания: утром, натощак{hint}\n"
                                                     "просто пришли число, например <code>57.5</code>",
                                    parse_mode=ParseMode.HTML)
 
@@ -607,7 +613,7 @@ async def on_weight_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         return False
     st.add_weight(kg, st.today())
     w = st.weights()
-    trend = f", было {w[-2]['kg']}" if len(w) >= 2 else ""
+    trend = f", неделю назад было {w[-2]['kg']}" if len(w) >= 2 else ""
     await update.message.set_reaction("👌")
     await reply(update, f"записала {kg} кг{trend}. норма {report.goal(st)} ккал")
     return True
@@ -638,7 +644,7 @@ def main():
     tz = datetime.now().astimezone().tzinfo
     app.job_queue.run_daily(job_daily, time(22, 0, tzinfo=tz))
     app.job_queue.run_daily(job_weekly, time(21, 0, tzinfo=tz), days=(0,))  # 0 = воскресенье в PTB
-    app.job_queue.run_daily(job_weight, WEIGHT_AT)
+    app.job_queue.run_daily(job_weight, WEIGHT_AT, days=((WEIGHT_DAY + 1) % 7,))  # в PTB 0 = воскресенье
     for t in FOOD_AT:
         app.job_queue.run_daily(job_nudge, t)
     log.info("eat-burn запущен, норма %s ккал", report.goal(st))
