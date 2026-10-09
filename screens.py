@@ -9,7 +9,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 MEAL = r"(?:\d-?й\s+)?(?:завтрак|обед|ужин|полдник|перекус)"
 _LABELS = re.compile(r"ккал.*\bб\b.*\bж\b.*\bу\b", re.I)
@@ -38,7 +38,7 @@ class Dish:
 
 @dataclass
 class Screen:
-    kind: str  # "card" или "list"
+    kind: str  # "card", "menu" (бумажное меню на день) или "list"
     dishes: list[Dish]
 
 
@@ -52,10 +52,19 @@ def ocr(img: Image.Image) -> str:
 
 def read_screenshot(image: bytes) -> Screen | None:
     """None — это не скрин рациона (наверное, фото тарелки)."""
-    img = Image.open(io.BytesIO(image)).convert("L")
-    card = parse_card(ocr(img))
+    rgb = Image.open(io.BytesIO(image)).convert("RGB")
+    img = rgb.convert("L")
+    text = ocr(img)
+    card = parse_card(text)
     if card:
         return Screen("card", [card])
+    menu = parse_menu(text)
+    if len(menu) < 2:
+        # фото бумажного меню: цветная подсветка, мелкий шрифт. В зелёном канале розовый фон светлее, текст контрастнее
+        g = ImageOps.autocontrast(rgb.getchannel("G")).resize((rgb.width * 2, rgb.height * 2), Image.LANCZOS)
+        menu = parse_menu(ocr(g))
+    if len(menu) >= 2:
+        return Screen("menu", menu)
     # бледный серый текст и две колонки: увеличиваем, повышаем контраст, читаем колонки по отдельности
     w, h = img.size
     dishes = []
@@ -91,6 +100,47 @@ def parse_card(text: str) -> Dish | None:
         return Dish(_clean(" ".join(name_lines)), nums[0], meal.lower(), nums[1], nums[2], nums[3],
                     nums[4] if len(nums) > 4 else None)
     return None
+
+
+# «1-й завтрак (150 гр / 294 ккал / БЖУ, гр. 16,9/10,5/33,0)»; OCR путает «гр» с «rp», «ккал» с «Kxan»
+_MENU_MEAL = re.compile(rf"^\W*(?P<meal>{MEAL})\b", re.I)
+_MENU_PFC = re.compile(r"(\d{1,3}[.,]\d)\s*/\s*(\d{1,3}[.,]\d)\s*/\s*(\d{1,3}[.,]\d)")
+_MENU_GRAMS = re.compile(r"\(\s*(\d{2,3})\s*(?:гр|rp|г\b)", re.I)
+_MENU_KCAL = re.compile(r"\b(\d{2,4})\s*(?:ккал|kxan|kkan|ккa)", re.I)
+_WORD = re.compile(r"^[А-Яа-яЁё][а-яё\-]*$")
+
+
+def _name_from_line(line: str) -> str:
+    """Самый длинный кусок из русских слов: «@ Блинчики из … творогом WD e» -> «Блинчики из … творогом»."""
+    best, cur = [], []
+    for tok in line.split():
+        if _WORD.match(tok):
+            cur.append(tok)
+        else:
+            best, cur = max(best, cur, key=len), []
+    best = max(best, cur, key=len)
+    while best and len(best[-1]) == 1:  # «… фруктами М»: хвост из одной буквы — мусор
+        best.pop()
+    return " ".join(best)
+
+
+def parse_menu(text: str) -> list[Dish]:
+    """Бумажное меню на день: строка с приёмом пищи и БЖУ, следующая строка — название."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    dishes = []
+    for i, line in enumerate(lines):
+        meal, pfc = _MENU_MEAL.match(line), _MENU_PFC.search(line)
+        if not (meal and pfc):
+            continue
+        p, f, c = (float(x.replace(",", ".")) for x in pfc.groups())
+        calc = round(4 * p + 9 * f + 4 * c)
+        kcal = _MENU_KCAL.search(line[:pfc.start()])
+        kcal = float(kcal.group(1)) if kcal and abs(float(kcal.group(1)) - calc) <= max(15, 0.12 * calc) else calc
+        grams = _MENU_GRAMS.search(line)
+        name = _name_from_line(lines[i + 1]) if i + 1 < len(lines) else ""
+        dishes.append(Dish(_clean(name), kcal, meal.group("meal").lower(), p, f, c,
+                           float(grams.group(1)) if grams else None))
+    return dishes
 
 
 def parse_list(text: str) -> list[Dish]:

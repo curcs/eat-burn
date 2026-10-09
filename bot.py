@@ -322,7 +322,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if screen and screen.kind == "card":
         await on_card(update, context, screen.dishes[0])
     elif screen:
-        await on_list(update, context, screen.dishes)
+        await on_list(update, context, screen.dishes, menu=screen.kind == "menu")
     else:
         await parse_and_show(update, context, llm.parse_photo, image, update.message.caption or "")
 
@@ -353,19 +353,28 @@ def list_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-async def on_list(update: Update, context: ContextTypes.DEFAULT_TYPE, dishes: list[screens.Dish]):
-    """Список заказов: блюд несколько, съедено может быть не всё — даём выбрать галочками."""
+async def on_list(update: Update, context: ContextTypes.DEFAULT_TYPE, dishes: list[screens.Dish], menu: bool = False):
+    """Список заказов или бумажное меню: блюд несколько, съедено может быть не всё — даём выбрать галочками.
+    Меню на день обычно приходит до еды, поэтому там по умолчанию ничего не отмечено."""
     eaten = st.eaten_on(st.today())
     items = []
     for d in dishes:
         known = st.find_dish(d.name)
-        name = known["name"] if known else d.name  # «…с шампиньо...» -> полное название из карточки
-        st.put_dish(name, d.kcal)
+        if not known and d.protein is not None:
+            known = st.find_dish_by_pfc(d.protein, d.fat, d.carbs)
+        # «…с шампиньо...» или «мукитрубого» -> название из справочника
+        name = known["name"] if known else d.name or f"{d.meal or 'блюдо'} {report.n(d.kcal)} ккал"
+        st.put_dish(name, d.kcal, d.protein, d.fat, d.carbs)
         dish = dish_dict(st.get_dish(name))
-        dish.update(meal=d.meal, on=norm(name) not in eaten)
+        dish.update(meal=d.meal, on=not menu and norm(name) not in eaten)
         items.append(dish)
-    note = "\n\nсняла галочки с того, что уже записано сегодня" if not all(i["on"] for i in items) else ""
-    msg = await reply(update, f"нашла {len(items)} блюд, отметь, что съела:{note}", reply_markup=list_keyboard(items))
+    if menu:
+        text = (f"добавила {len(items)} блюд из меню в справочник 📋\n"
+                "отметь, что уже съела, или записывай потом через /f")
+    else:
+        note = "\n\nсняла галочки с того, что уже записано сегодня" if not all(i["on"] for i in items) else ""
+        text = f"нашла {len(items)} блюд, отметь, что съела:{note}"
+    msg = await reply(update, text, reply_markup=list_keyboard(items))
     context.user_data["screen_list"] = {"items": items, "msg": msg.message_id}
 
 
@@ -387,6 +396,9 @@ async def on_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("❌ не записала")
         return
     chosen = [it for it in sl["items"] if it["on"]]
+    if not chosen:
+        await q.edit_message_text("ок, ничего не записала. блюда остались в справочнике, ищи через /f")
+        return
     for it in chosen:
         st.add_entry("quick", it["name"], it["kcal"], "screen", it["protein"], it["fat"], it["carbs"])
     lines = "\n".join(f"• {report.esc(it['name'])} · {report.n(it['kcal'])}{pfc_line(it)}" for it in chosen)

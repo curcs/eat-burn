@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from screens import Dish, parse_card, parse_list
+from screens import Dish, parse_card, parse_list, parse_menu
 from storage import Storage
 
 # так tesseract читает карточку блюда BeFit
@@ -34,6 +34,39 @@ AH®
 Обед 225 Ккал
 Главная Заказать
 """
+
+
+# так tesseract читает фото бумажного меню BeFit (розовая подсветка, калории обведены ручкой)
+MENU = """Пятница #111
+1-й завтрак (100 rp C28 кка) БЖУ, гр. 5,3/3,5/48,7)
+$ Панкейки из мукитрубого помола с джемом V `
+мука грубого помола, молоко кокосовое, бананы, соль
+2-й завтрак (170 гр / 220 ккал / BMY, гр. 25,9/7.1/13,1)
+© Творог с банановым конфитюром и кешью A A
+творог, бананы, NEKTHH,Opex кешью, корица
+ужин (250 rp / 203 Kxan / БЖУ, гр. 21,6/5,3/17,1) ae /
+Куриная грудка с кабачками и перцем на гриле f < 7%
+"""
+
+
+def test_menu():
+    dishes = parse_menu(MENU)
+    assert [(d.meal, d.kcal, d.protein, d.fat, d.carbs, d.grams) for d in dishes] == [
+        ("1-й завтрак", 248, 5.3, 3.5, 48.7, 100),  # ккал не прочитались — посчитаны из БЖУ
+        ("2-й завтрак", 220, 25.9, 7.1, 13.1, 170),
+        ("ужин", 203, 21.6, 5.3, 17.1, 250),
+    ]
+    assert [d.name for d in dishes] == ["панкейки из мукитрубого помола с джемом",
+                                        "творог с банановым конфитюром и кешью",
+                                        "куриная грудка с кабачками и перцем на гриле"]
+    assert parse_menu(CARD) == [] and parse_menu(LIST_COLUMN) == []
+
+
+def test_find_by_pfc(tmp_path):
+    st = Storage(str(tmp_path / "p.db"))
+    st.put_dish("панкейки из муки грубого помола с джемом", 248, 5.3, 3.5, 48.7)
+    assert st.find_dish_by_pfc(5.3, 3.5, 48.7)["name"] == "панкейки из муки грубого помола с джемом"
+    assert st.find_dish_by_pfc(5.3, 3.5, 40.0) is None
 
 
 def test_card():

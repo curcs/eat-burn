@@ -147,6 +147,12 @@ class Storage:
         prefix = norm(name[:-3])
         return next((d for d in self.dishes() if d["name"].startswith(prefix)), None)
 
+    def find_dish_by_pfc(self, protein: float, fat: float, carbs: float) -> sqlite3.Row | None:
+        """Блюдо с теми же БЖУ: OCR мог исказить название («мукитрубого»), а цифры БЖУ почти уникальны."""
+        return next((d for d in self.dishes() if d["protein"] is not None
+                     and abs(d["protein"] - protein) < 0.05 and abs(d["fat"] - fat) < 0.05
+                     and abs(d["carbs"] - carbs) < 0.05), None)
+
     def search_dishes(self, query: str = "", limit: int = 8) -> list[sqlite3.Row]:
         """Блюда, в названии которых есть все слова запроса (можно начала слов: «сан пел»).
         Сначала то, что записывается чаще. Пустой запрос — просто самое частое."""
