@@ -5,4 +5,4 @@ pytest
 pillow
 zxing-cpp
 matplotlib
-mcp
+mcp>=2
