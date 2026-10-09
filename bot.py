@@ -305,6 +305,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if dish:
         await show_dish(update, context, dish_dict(dish))
         return
+    # «лимонад» -> «лимонад боржоми аджарский мандарин»: по словам нашлось ровно одно блюдо — предлагаем его
+    similar = st.search_dishes(text, limit=2)
+    if len(similar) == 1:
+        await show_dish(update, context, dish_dict(similar[0]),
+                        "из справочника. не то? жми ❌ и напиши подробнее, например с граммами")
+        return
 
     await parse_and_show(update, context, llm.parse_text, text)
 
