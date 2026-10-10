@@ -343,3 +343,22 @@ def test_generic_coffee_fixed(st, usda):
     assert d.items[0].name == "флэт уайт" and d.items[0].kcal == 90
     d = fix_generic_coffee(Draft([Item("кофе", "coffee", 250)]), "просто кофе")
     assert d.items[0].name == "кофе"
+
+
+def test_keyboard_buttons_routed():
+    import asyncio
+    from types import SimpleNamespace
+    import bot
+    called = []
+    async def fake(update, context): called.append(context.args)
+    orig = (bot.cmd_today, bot.cmd_find)
+    bot.cmd_today, bot.cmd_find = fake, fake
+    try:
+        ctx = SimpleNamespace(args=None, user_data={})
+        assert asyncio.run(bot.on_keyboard_button(None, ctx, "📊 сегодня"))
+        assert asyncio.run(bot.on_keyboard_button(None, ctx, "🔎 частое"))
+        assert not asyncio.run(bot.on_keyboard_button(None, ctx, "овсянка 60г"))
+        assert called == [[], []]
+    finally:
+        bot.cmd_today, bot.cmd_find = orig
+    assert all(len(d) <= 256 and c.islower() for c, d in bot.COMMANDS)

@@ -17,7 +17,7 @@ import re
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, filters)
@@ -368,6 +368,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     """Общий разбор для текста и расшифрованных голосовых."""
     log.info("сообщение: %s (ждём: %s)", text[:80], context.user_data.get("awaiting"))
+    if await on_keyboard_button(update, context, text):
+        context.user_data["awaiting"] = None
+        return
     ud = context.user_data
     awaiting = ud.get("awaiting")
 
@@ -657,7 +660,50 @@ async def on_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await reply(update, f"норма сейчас {report.goal(st)} ккал в день\n\n" + HELP)
+    await reply(update, f"норма сейчас {report.goal(st)} ккал в день\n\n" + HELP, reply_markup=MAIN_KEYBOARD)
+
+
+# подсказки при вводе «/» и в кнопке «Меню»
+COMMANDS = [
+    ("today", "сегодня и остаток, правка записей"),
+    ("f", "найти блюдо и записать одним нажатием"),
+    ("week", "неделя и график"),
+    ("undo", "удалить последнюю запись"),
+    ("weight", "записать вес: /weight 57.5"),
+    ("dishes", "мои блюда"),
+    ("patterns", "самочувствие и закономерности"),
+    ("tdee", "реальный расход по весу"),
+    ("goal", "норма калорий"),
+    ("remind", "напоминания"),
+    ("food", "ккал на 100 г в справочник"),
+    ("file", "табличка xlsx"),
+    ("help", "что я умею"),
+]
+
+# постоянные кнопки под полем ввода: текст кнопки -> что сделать
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [[KeyboardButton("📊 сегодня"), KeyboardButton("🔎 частое"), KeyboardButton("💧 стакан воды")],
+     [KeyboardButton("📅 неделя"), KeyboardButton("↩️ отменить последнее"), KeyboardButton("❓ помощь")]],
+    resize_keyboard=True, is_persistent=True, input_field_placeholder="что съела или сожгла?")
+
+
+async def on_keyboard_button(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    actions = {"📊 сегодня": cmd_today, "📅 неделя": cmd_week, "↩️ отменить последнее": cmd_undo,
+               "❓ помощь": cmd_start, "🔎 частое": cmd_find}
+    if text in actions:
+        context.args = []
+        await actions[text](update, context)
+        return True
+    if text == "💧 стакан воды":
+        return await on_water(update, "стакан воды")
+    return False
+
+
+async def post_init(app: Application):
+    await app.bot.set_my_commands([BotCommand(c, d) for c, d in COMMANDS])
+    if st.get("keyboard_sent") != "1":  # один раз прислать кнопки, дальше они живут в чате сами
+        await app.bot.send_message(config.OWNER_ID, "добавила кнопки внизу и подсказки при вводе /", reply_markup=MAIN_KEYBOARD)
+        st.set("keyboard_sent", "1")
 
 
 GLASS_ML = 200
@@ -1014,7 +1060,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    app = Application.builder().token(config.BOT_TOKEN).build()
+    app = Application.builder().token(config.BOT_TOKEN).post_init(post_init).build()
     app.add_error_handler(on_error)
     for name, fn in [("start", cmd_start), ("help", cmd_start), ("today", cmd_today), ("week", cmd_week),
                      ("undo", cmd_undo), ("weight", cmd_weight), ("goal", cmd_goal), ("food", cmd_food), ("dishes", cmd_dishes), ("dish_del", cmd_dish_del),
