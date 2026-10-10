@@ -173,6 +173,28 @@ TYPICAL_DRINKS = [
 ]
 
 
+# как называть напиток, если модель свела «кофе флэт 200 мл» к просто «кофе»
+SPECIFIC_DRINKS = [(r"\bраф", "раф"), (r"флэт|флет|flat", "флэт уайт"), (r"латте|latte", "латте"),
+                   (r"капучино|cappuccino", "капучино"), (r"эспрессо|espresso", "эспрессо"),
+                   (r"американо|americano", "американо")]
+
+
+def specific_drink(text: str) -> str | None:
+    """Если в исходном тексте ровно один конкретный кофейный напиток — его название."""
+    found = {name for pattern, name in SPECIFIC_DRINKS if re.search(pattern, text.lower())}
+    return found.pop() if len(found) == 1 else None
+
+
+def fix_generic_coffee(draft: "Draft", text: str) -> "Draft":
+    """Модель иногда пишет просто «кофе» вместо «флэт уайт» — и тогда считает как чёрный. Возвращаем название из текста."""
+    drink = specific_drink(text)
+    if drink:
+        for item in draft.items:
+            if re.fullmatch(r"кофе|coffee", item.name.strip()):
+                item.name, item.per100 = drink, None
+    return draft
+
+
 def typical_drink(name: str) -> Per100 | None:
     for pattern, kcal, p, f, c in TYPICAL_DRINKS:
         if re.search(pattern, name.lower().strip()):

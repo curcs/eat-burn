@@ -334,3 +334,12 @@ def test_activity_hint(st):
     assert report.activity_hint(st, day) == ""
     st.add_entry("quick", "блинчики", 294, "manual", when=datetime(2026, 10, 9, 13))
     assert "быстрой ходьбы" in report.activity_hint(st, day) and "силовой" in report.format_day(st, day)
+
+
+def test_generic_coffee_fixed(st, usda):
+    from nutrition import fix_generic_coffee
+    d = fix_generic_coffee(Draft([Item("кофе", "coffee", 200)]), "кофе флэт 200 мл")
+    d = Nutrition(st, usda, use_off=False).fill(d)
+    assert d.items[0].name == "флэт уайт" and d.items[0].kcal == 90
+    d = fix_generic_coffee(Draft([Item("кофе", "coffee", 250)]), "просто кофе")
+    assert d.items[0].name == "кофе"

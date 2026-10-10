@@ -26,7 +26,7 @@ import report
 import products
 import screens
 from llm import LLM, LLMError
-from nutrition import Draft, Nutrition
+from nutrition import Draft, Nutrition, fix_generic_coffee
 from parser import parse_edit_lines, parse_quick
 from storage import Storage, norm
 
@@ -128,6 +128,8 @@ async def parse_and_show(update, context, fn, *args):
     await update.effective_chat.send_action("typing")
     try:
         draft = await asyncio.to_thread(fn, *args)
+        if fn == llm.parse_text:
+            fix_generic_coffee(draft, args[0])
     except LLMError as e:
         log.warning("llm: %s", e)
         await reply(update, "модель сейчас не справилась 😕 напиши ккал числом: <code>350 овсянка</code>")
