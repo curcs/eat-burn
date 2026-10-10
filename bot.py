@@ -365,6 +365,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     """Общий разбор для текста и расшифрованных голосовых."""
+    log.info("сообщение: %s (ждём: %s)", text[:80], context.user_data.get("awaiting"))
     ud = context.user_data
     awaiting = ud.get("awaiting")
 
@@ -469,6 +470,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
 @owner_only
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # картинка файлом приходит без сжатия Telegram — штрихкоды и мелкий текст читаются лучше
+    log.info("фото%s", " файлом" if update.message.document else "")
     src = update.message.photo[-1] if update.message.photo else update.message.document
     image = bytes(await (await src.get_file()).download_as_bytearray())
     await update.effective_chat.send_action("typing")
