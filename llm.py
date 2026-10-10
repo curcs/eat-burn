@@ -27,8 +27,12 @@ PROMPT = """Ты разбираешь запись о еде на отдельн
   банан 120, яблоко 180, яйцо 55, столовая ложка мёда/масла 20/15, чайная ложка 7,
   кусок хлеба 30, тарелка супа 300, гарнир 150, кусок мяса/рыбы 120, чашка кофе с молоком 250;
 - kcal_100g: примерная калорийность на 100 г в готовом виде (банан 90, борщ 50, гречка варёная 110).
-Штуки переводи в граммы: яйцо 55, сырник 50, блин 50, котлета 80, печенье 12, ломтик сыра 20.
+Штуки переводи в граммы и умножай на количество: яйцо 55, сырник 50, блин 50, котлета 80, печенье 12,
+ломтик сыра 20, мандарин 80 ("три мандарина" = 240), кусок пиццы 120, плитка шоколада 90 ("пол шоколадки" = 45),
+чашка чая 250.
 Готовое блюдо без состава ("борщ", "сырники", "пицца", "цезарь") — один продукт.
+Блюдо "с чем-то", что входит в его рецепт, — тоже один продукт, не дели: "салат цезарь с курицей",
+"паста с курицей", "гречка с грибами". Отдельно — только то, что едят отдельно: "тост с авокадо" -> тост и авокадо.
 Напиток "на овсяном/миндальном/коровьем" — это молоко в напитке, один продукт, не овсянка.
 
 Словарик name_en: гречка = buckwheat groats cooked, рис = rice white cooked, овсянка = oats dry,
@@ -70,11 +74,17 @@ class LLMError(Exception):
     pass
 
 
+YANDEX_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+
+
 class LLM:
+    """Текст — локальная модель в Ollama или YandexGPT (yandex=(folder_id, api_key, модель)); фото — всегда Ollama."""
+
     def __init__(self, text_model: str = "qwen2.5:7b", vision_model: str = "gemma3:4b",
-                 url: str = OLLAMA_URL, timeout: float = 120):
+                 url: str = OLLAMA_URL, timeout: float = 120, yandex: tuple[str, str, str] | None = None):
         self.text_model, self.vision_model = text_model, vision_model
         self.url, self.timeout = url, timeout
+        self.yandex = yandex
 
     def parse_text(self, text: str) -> Draft:
         return self._ask(self.text_model, PROMPT, text, None, "text")
@@ -99,6 +109,8 @@ class LLM:
         return new
 
     def _ask(self, model, system, user, image, source, schema=SCHEMA) -> Draft:
+        if self.yandex and not image:
+            return self._ask_yandex(system, user, source, schema)
         msg = {"role": "user", "content": user}
         if image:
             msg["images"] = [base64.b64encode(image).decode()]
@@ -115,6 +127,28 @@ class LLM:
             except (ValueError, KeyError, TypeError) as e:
                 last_err = e
         raise LLMError(f"модель ответила не по формату: {last_err}")
+
+    def _ask_yandex(self, system, user, source, schema) -> Draft:
+        """YandexGPT в Yandex Cloud: ответ строго по JSON-схеме, как у Ollama."""
+        folder, key, model = self.yandex
+        body = {"modelUri": f"gpt://{folder}/{model}/latest",
+                "completionOptions": {"stream": False, "temperature": 0, "maxTokens": "1000"},
+                "jsonSchema": {"schema": schema},
+                "messages": [{"role": "system", "text": system}, {"role": "user", "text": user}]}
+        headers = {"Authorization": f"Api-Key {key}", "x-folder-id": folder}
+        last_err = None
+        for _ in range(2):
+            try:
+                r = httpx.post(YANDEX_URL, json=body, headers=headers, timeout=self.timeout)
+                if r.status_code >= 400:
+                    raise LLMError(f"YandexGPT {r.status_code}: {r.text[:300]}")
+                text = r.json()["result"]["alternatives"][0]["message"]["text"]
+                return to_draft(text.strip().removeprefix("```json").removeprefix("```").removesuffix("```"), source)
+            except httpx.HTTPError as e:
+                raise LLMError(f"YandexGPT недоступен: {e}") from e
+            except (ValueError, KeyError, TypeError, IndexError) as e:
+                last_err = e
+        raise LLMError(f"YandexGPT ответил не по формату: {last_err}")
 
 
 def to_draft(content: str, source: str) -> Draft:

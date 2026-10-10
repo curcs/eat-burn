@@ -11,6 +11,13 @@ SEX = "f"
 TEXT_MODEL = "qwen2.5:7b"
 VISION_MODEL = "gemma3:4b"
 
+# разбор текста через YandexGPT вместо локальной модели (фото всё равно локально).
+# нужен каталог в Yandex Cloud и API-ключ сервисного аккаунта с ролью ai.languageModels.user
+LLM_BACKEND = "ollama"            # "yandex", чтобы включить
+YANDEX_FOLDER_ID = ""             # ID каталога, вида b1g...
+YANDEX_API_KEY = ""               # секрет, никому не показывай
+YANDEX_MODEL = "yandexgpt-lite"   # или "yandexgpt" (Pro, дороже)
+
 # день начинается в 4 утра: перекус в 00:30 считается во вчерашний день
 DAY_START_HOUR = 4
 

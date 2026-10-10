@@ -54,7 +54,10 @@ report.SHOW_PFC = getattr(config, "SHOW_PFC", False)
 st = Storage(str(DATA / "eatburn.db"), getattr(config, "DAY_START_HOUR", 4),
              getattr(config, "ACTIVE_BASELINE", 200))
 nutr = Nutrition(st, DATA / "usda.db")
-llm = LLM(getattr(config, "TEXT_MODEL", "qwen2.5:7b"), getattr(config, "VISION_MODEL", "gemma3:4b"))
+_yandex = None
+if getattr(config, "LLM_BACKEND", "ollama") == "yandex":  # текст через YandexGPT, фото — по-прежнему локально
+    _yandex = (config.YANDEX_FOLDER_ID, config.YANDEX_API_KEY, getattr(config, "YANDEX_MODEL", "yandexgpt-lite"))
+llm = LLM(getattr(config, "TEXT_MODEL", "qwen2.5:7b"), getattr(config, "VISION_MODEL", "gemma3:4b"), yandex=_yandex)
 
 for key in ("height_cm", "birth_year", "start_weight", "sex"):
     if st.get(key) is None and hasattr(config, key.upper()):
