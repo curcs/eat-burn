@@ -120,7 +120,11 @@ async def show_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: 
                             "напиши число, я запомню")
         return
     ud["awaiting"] = None
-    msg = await reply(update, report.format_draft(draft, st, st.today()), reply_markup=KEYBOARD)
+    eaten = st.eaten_names_on(st.today())
+    dups = [i.name for i in draft.items if norm(i.name) in eaten]
+    warn = (f"\n\n⚠️ уже записано сегодня: {report.esc(', '.join(dups))}. если это повтор, убери через ✏️"
+            if dups else "")
+    msg = await reply(update, report.format_draft(draft, st, st.today()) + warn, reply_markup=KEYBOARD)
     ud["draft_msg"] = msg.message_id
 
 
@@ -284,8 +288,12 @@ SYMPTOMS = [  # (как пишут, что записываем)
     (r"(?:кружится\s+голова|голова\s+кружится|головокружени\w*|(?:низко\w*\s+|упало\s+)?давлени\w*"
      r"(?:\s+(?:низко\w*|упало|упал\w*|падает))?)", "давление"),
     (r"(?:слабост\w*|нет\s+сил)", "слабость"),
+    (r"(?:(?:очень\s+|совсем\s+)?(?:плохо|мало|почти\s+не)\s+спал\w*|не\s+выспал\w*|бессонниц\w*|"
+     r"уснул\w*\s+(?:только|поздно)(?:\s+(?:в|около)\s+\w+)?)", "сон"),
 ]
-SYMPTOM_EMOJI = {"норм": "👍", "голова": "🤕", "давление": "😵", "слабость": "😩"}
+SYMPTOM_EMOJI = {"норм": "👍", "голова": "🤕", "давление": "😵", "слабость": "😩", "сон": "😴"}
+# сообщение — рассказ о самочувствии: записываем целиком как заметку и еду из него не вытаскиваем
+_WELLBEING = re.compile(r"самочувстви|чувствую\s+себя|хотела\s+рассказать|состояние", re.I)
 
 
 def extract_symptoms(text: str) -> tuple[list[str], str]:
@@ -300,8 +308,8 @@ def extract_symptoms(text: str) -> tuple[list[str], str]:
 
 
 def symptoms_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton(f"{e} {k}", callback_data=f"sy:{k}")
-                                  for k, e in SYMPTOM_EMOJI.items()]])
+    buttons = [InlineKeyboardButton(f"{e} {k}", callback_data=f"sy:{k}") for k, e in SYMPTOM_EMOJI.items()]
+    return InlineKeyboardMarkup([buttons[:3], buttons[3:]])
 
 
 async def on_symptom_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -367,7 +375,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     """Общий разбор для текста и расшифрованных голосовых."""
-    log.info("сообщение: %s (ждём: %s)", text[:80], context.user_data.get("awaiting"))
+    log.info("сообщение: %s (ждём: %s)", text, context.user_data.get("awaiting"))
     if await on_keyboard_button(update, context, text):
         context.user_data["awaiting"] = None
         return
@@ -375,6 +383,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
     awaiting = ud.get("awaiting")
 
     kinds, rest = extract_symptoms(text)
+    if _WELLBEING.search(text):
+        for k in kinds:
+            st.add_symptom(k)
+        st.add_symptom("заметка", note=text)
+        found = ", ".join(f"{SYMPTOM_EMOJI[k]} {k}" for k in kinds)
+        await reply(update, "записала про самочувствие" + (f": {found}" if found else "") +
+                    ". береги себя 💛\nеду из этого сообщения не записываю: если что-то съела, напиши отдельно")
+        return
     if kinds:
         for k in kinds:
             st.add_symptom(k)

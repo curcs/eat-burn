@@ -1,4 +1,5 @@
 """SQLite: записи, продукты внутри приёмов пищи, личный справочник, вес, настройки."""
+import re
 import sqlite3
 from datetime import date, datetime, timedelta
 
@@ -58,6 +59,8 @@ class Storage:
         for col in ("protein", "fat", "carbs"):  # БЖУ у блюд появились позже — досоздаём колонки
             if col not in cols:
                 self.db.execute(f"ALTER TABLE dishes ADD COLUMN {col} REAL")
+        if "note" not in {r["name"] for r in self.db.execute("PRAGMA table_info(symptoms)")}:
+            self.db.execute("ALTER TABLE symptoms ADD COLUMN note TEXT")  # рассказ о самочувствии своими словами
         self.day_start_hour = day_start_hour
         if self.get("day_start_hour") != str(day_start_hour):
             self._recompute_days()
@@ -224,6 +227,16 @@ class Storage:
         """Названия того, что уже записано за день, — чтобы не записать одно блюдо дважды."""
         return {norm(e["descr"]) for e in self.entries(day) if e["kind"] not in ("workout", "watch")}
 
+    def eaten_names_on(self, day: date) -> set[str]:
+        """То же по отдельным продуктам: «овсянка 40г» и продукты внутри разобранных приёмов пищи."""
+        names = set()
+        for e in self.entries(day):
+            if e["kind"] in ("workout", "watch"):
+                continue
+            items = self.db.execute("SELECT name FROM entry_items WHERE entry_id = ?", (e["id"],)).fetchall()
+            names |= {norm(i["name"]) for i in items} or {norm(re.sub(r"\s*\d+\s*(г|мл)\b", "", e["descr"]))}
+        return names
+
     def dishes(self) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM dishes ORDER BY name").fetchall()
 
@@ -238,18 +251,24 @@ class Storage:
                             ((day or self.today()).isoformat(), kg))
 
     # --- самочувствие ---
-    def add_symptom(self, kind: str, when: datetime | None = None):
-        """«норм» за день отменяет себя, если потом пришёл симптом, и наоборот не трогает симптомы."""
+    def add_symptom(self, kind: str, when: datetime | None = None, note: str | None = None):
+        """«норм» за день отменяет себя, если потом пришёл симптом, и наоборот не трогает симптомы.
+        kind="заметка" — рассказ о самочувствии своими словами (note), для врача и для себя."""
         when = when or datetime.now()
         day = self.day_of(when).isoformat()
         with self.db:
-            if kind != "норм":
+            if kind not in ("норм", "заметка"):
                 self.db.execute("DELETE FROM symptoms WHERE day = ? AND kind = 'норм'", (day,))
-            self.db.execute("INSERT INTO symptoms (ts, day, kind) VALUES (?,?,?)",
-                            (when.isoformat(timespec="seconds"), day, kind))
+            self.db.execute("INSERT INTO symptoms (ts, day, kind, note) VALUES (?,?,?,?)",
+                            (when.isoformat(timespec="seconds"), day, kind, note))
 
     def symptoms_on(self, day: date) -> set[str]:
-        return {r["kind"] for r in self.db.execute("SELECT kind FROM symptoms WHERE day = ?", (day.isoformat(),))}
+        return {r["kind"] for r in self.db.execute("SELECT kind FROM symptoms WHERE day = ?", (day.isoformat(),))
+                if r["kind"] != "заметка"}
+
+    def notes_on(self, day: date) -> list[str]:
+        return [r["note"] for r in self.db.execute(
+            "SELECT note FROM symptoms WHERE day = ? AND kind = 'заметка' ORDER BY ts", (day.isoformat(),))]
 
     # --- вода ---
     def add_water(self, ml: float, when: datetime | None = None):

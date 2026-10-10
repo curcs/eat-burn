@@ -362,3 +362,21 @@ def test_keyboard_buttons_routed():
     finally:
         bot.cmd_today, bot.cmd_find = orig
     assert all(len(d) <= 256 and c.islower() for c, d in bot.COMMANDS)
+
+
+def test_sleep_and_wellbeing_note(st):
+    import bot
+    kinds, rest = bot.extract_symptoms("я очень плохо спала, уснула только в четыре")
+    assert kinds == ["сон"]
+    assert bot._WELLBEING.search("Хотела рассказать про самочувствие, я очень плохо спала")
+    st.add_symptom("заметка", datetime(2026, 10, 10, 12), note="плохо спала")
+    st.add_symptom("сон", datetime(2026, 10, 10, 12))
+    assert st.symptoms_on(date(2026, 10, 10)) == {"сон"}
+    assert st.notes_on(date(2026, 10, 10)) == ["плохо спала"]
+
+
+def test_eaten_names(st):
+    at = datetime(2026, 10, 10, 12)
+    st.add_entry("meal", "овсянка 40г", 145, "text", items=[{"name": "овсянка", "grams": 40, "kcal": 145}], when=at)
+    st.add_entry("quick", "санпелегрино гранат апельсин", 125, "manual", when=at)
+    assert st.eaten_names_on(date(2026, 10, 10)) == {"овсянка", "санпелегрино гранат апельсин"}
