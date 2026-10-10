@@ -89,6 +89,19 @@ def test_lookup_order(st, usda):
     assert nu.lookup("л-карнитин", "l carnitine syrup", guess=15).match == "≈ оценка модели"
 
 
+def test_coffee_typical(st, usda):
+    nu = Nutrition(st, usda, use_off=False)
+    assert nu.lookup("капучино", "cappuccino").kcal == 40
+    assert nu.lookup("латте на овсяном молоке", "latte oat milk").kcal == 50
+    assert nu.lookup("кофе с молоком", "coffee with milk").kcal == 15
+    assert nu.lookup("американо", "americano").kcal == 2
+    assert nu.lookup("кофе", "coffee").kcal == 2
+    assert nu.lookup("чай чёрный", "black tea").kcal == 1
+    assert nu.lookup("чай с сахаром", "tea with sugar") is None  # не «чай без всего»
+    st.put_food("капучино", 55)
+    assert nu.lookup("капучино", "cappuccino").kcal == 55            # свой справочник важнее
+
+
 def test_draft_totals(st, usda):
     d = Nutrition(st, usda, use_off=False).fill(Draft([Item("банан", "banana raw", 120), Item("чак-чак", "x", 50)]))
     assert round(d.total()) == 107

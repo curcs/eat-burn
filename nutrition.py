@@ -86,6 +86,9 @@ class Nutrition:
         row = self.storage.get_food(name_ru)
         if row:
             return Per100(row["kcal"], row["protein"], row["fat"], row["carbs"], "мой справочник")
+        drink = typical_drink(name_ru)
+        if drink:
+            return drink
         # укороченный запрос к USDA («cottage cheese pancakes» -> «cottage cheese») — уже другой продукт,
         # поэтому сначала полный запрос, потом Open Food Facts по русскому названию, и только потом укороченный
         found = (self._usda(name_en, guess, exact=True)
@@ -153,6 +156,28 @@ class Nutrition:
                 return Per100(kcal, n.get("proteins_100g"), n.get("fat_100g"),
                               n.get("carbohydrates_100g"), f"OFF: {p.get('product_name', name)}")
         return None
+
+
+# Кофе и чай: в USDA их почти нет, а в Open Food Facts по «капучино» находится шоколадка.
+# Типичный кофейный рецепт на 100 мл (коровье молоко; на растительном примерно так же). Порядок важен: от частного к общему.
+TYPICAL_DRINKS = [
+    (r"\bраф", 100, 2.5, 6, 9),
+    (r"флэт|флет|flat", 45, 2.5, 2.3, 3.6),
+    (r"латте|latte", 50, 2.7, 2.6, 4),
+    (r"капучино|cappuccino", 40, 2.2, 2, 3.2),
+    (r"эспрессо|espresso", 9, 0.1, 0.2, 1.7),
+    (r"американо|americano|ч[её]рн\w* кофе|кофе без молока", 2, 0.1, 0, 0.3),
+    (r"кофе с молоком|кофе со сливками", 15, 0.8, 0.8, 1.2),
+    (r"^кофе$|^coffee$", 2, 0.1, 0, 0.3),
+    (r"^ча[йя]\b(?!.*(сахар|мёд|мед|молок))", 1, 0, 0, 0.2),
+]
+
+
+def typical_drink(name: str) -> Per100 | None:
+    for pattern, kcal, p, f, c in TYPICAL_DRINKS:
+        if re.search(pattern, name.lower().strip()):
+            return Per100(kcal, p, f, c, "типичный рецепт")
+    return None
 
 
 def plausible(kcal: float, guess: float | None) -> bool:
