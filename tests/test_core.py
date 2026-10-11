@@ -380,3 +380,17 @@ def test_eaten_names(st):
     st.add_entry("meal", "овсянка 40г", 145, "text", items=[{"name": "овсянка", "grams": 40, "kcal": 145}], when=at)
     st.add_entry("quick", "санпелегрино гранат апельсин", 125, "manual", when=at)
     assert st.eaten_names_on(date(2026, 10, 10)) == {"овсянка", "санпелегрино гранат апельсин"}
+
+
+def test_strict_dish_match(st):
+    for name in ("творог с банановым конфитюром и кешью", "лимонад боржоми аджарский мандарин",
+                 "стакан псыж гранат", "плов овощной из булгура"):
+        st.put_dish(name, 100)
+    strict = lambda q: [d["name"] for d in st.search_dishes(q, strict=True)]
+    assert strict("банан") == []                                  # не «банановым»
+    st.put_dish("стакан псыж лимон", 0)
+    assert strict("лимонад") == ["лимонад боржоми аджарский мандарин"]   # не «псыж лимон»
+    assert strict("лимонада") == ["лимонад боржоми аджарский мандарин"]
+    assert strict("псыж гранат") == ["стакан псыж гранат"]
+    assert strict("плов") == ["плов овощной из булгура"]
+    assert [d["name"] for d in st.search_dishes("банан")] == ["творог с банановым конфитюром и кешью"]  # /f гибкий

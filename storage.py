@@ -1,4 +1,5 @@
 """SQLite: записи, продукты внутри приёмов пищи, личный справочник, вес, настройки."""
+import os
 import re
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -210,16 +211,28 @@ class Storage:
                      and abs(d["protein"] - protein) < 0.05 and abs(d["fat"] - fat) < 0.05
                      and abs(d["carbs"] - carbs) < 0.05), None)
 
-    def search_dishes(self, query: str = "", limit: int = 8) -> list[sqlite3.Row]:
-        """Блюда, в названии которых есть все слова запроса (можно начала слов: «сан пел»).
-        Сначала то, что записывается чаще. Пустой запрос — просто самое частое."""
+    def search_dishes(self, query: str = "", limit: int = 8, strict: bool = False) -> list[sqlite3.Row]:
+        """Блюда, в названии которых есть все слова запроса. Сначала то, что записывается чаще.
+        Обычно хватает начала слова («сан пел») — это для /f, где выбираешь сама.
+        strict — для автоподстановки: слово целиком, разве что с окончанием («лимонада» = «лимонад»),
+        иначе «банан» находит «творог с банановым конфитюром»."""
         words = norm(query).split()
         freq: dict[str, int] = {}
         for e in self.all_entries():
             freq[norm(e["descr"])] = freq.get(norm(e["descr"]), 0) + 1
+
+        def word_hits(w: str, w2: str) -> bool:
+            if not strict:
+                return w2.startswith(w)
+            if w2 == w:
+                return True
+            # то же слово с другим окончанием в одну букву: «лимонада» = «лимонад», но «лимонад» ≠ «лимон»
+            common = len(os.path.commonprefix([w, w2]))
+            return min(len(w), len(w2)) >= 4 and abs(len(w) - len(w2)) <= 1 and common >= max(len(w), len(w2)) - 1
+
         found = [d for d in self.dishes()
-                 if all(any(w2.startswith(w) for w2 in d["name"].replace("-", " ").split()) or w in d["name"]
-                        for w in words)]
+                 if all(any(word_hits(w, w2) for w2 in d["name"].replace("-", " ").split())
+                        or (not strict and w in d["name"]) for w in words)]
         found.sort(key=lambda d: (-freq.get(d["name"], 0), d["name"]))
         return found[:limit]
 

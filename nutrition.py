@@ -115,7 +115,7 @@ class Nutrition:
         exact = self.storage.find_dish(name)
         if exact:
             return exact
-        similar = self.storage.search_dishes(name, limit=2)
+        similar = self.storage.search_dishes(name, limit=2, strict=True)
         return similar[0] if len(similar) == 1 else None
 
     def _usda(self, name_en: str, guess: float | None = None, exact: bool = False) -> Per100 | None:
