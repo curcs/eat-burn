@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS gym_sets (
 CREATE TABLE IF NOT EXISTS gym_aliases (  -- как тренер пишет коротко -> как называем в журнале
     alias TEXT PRIMARY KEY, name TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS gym_photos (   -- фото тренажёра из твоего зала: file_id в Telegram
+    exercise TEXT PRIMARY KEY, file_id TEXT NOT NULL
+);
 """
 
 NUM = r"\d+(?:[.,]\d+)?"
@@ -97,6 +100,21 @@ class Gym:
         row = self.db.execute("SELECT name FROM gym_aliases WHERE alias = ?", (name,)).fetchone()
         return row[0] if row else name
 
+    def find_exercise(self, query: str) -> list[str]:
+        """Упражнения журнала, в названии которых есть все слова запроса (можно начала слов)."""
+        words = query.lower().replace("ё", "е").split()
+        return [n for n in self.exercises()
+                if all(any(w2.startswith(w) for w2 in n.replace("ё", "е").split()) for w in words)]
+
+    def set_photo(self, exercise: str, file_id: str):
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO gym_photos (exercise, file_id) VALUES (?,?)", (exercise, file_id))
+
+    def photo(self, exercise: str) -> str | None:
+        row = self.db.execute("SELECT file_id FROM gym_photos WHERE exercise = ?", (exercise,)).fetchone()
+        return row[0] if row else None
+
+
     def add_session(self, day: date, exercises: list[Exercise], source: str) -> int:
         exercises = [Exercise(self.canonical(e.name), e.sets) for e in exercises]
         with self.db:
@@ -140,6 +158,11 @@ class Gym:
                 out.append(f"{e.name}: {fmt_kg(top)} кг, было {fmt_kg(prev)} 💪")
         return out
 
+
+def image_search_url(exercise: str) -> str:
+    """Поиск картинок в Яндексе: как в целом выглядит тренажёр, пока нет своего фото."""
+    from urllib.parse import quote
+    return "https://yandex.ru/images/search?text=" + quote(f"тренажер {exercise}")
 
 def fmt_kg(w: float | None) -> str:
     if w is None:

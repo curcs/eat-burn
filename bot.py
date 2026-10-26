@@ -17,7 +17,7 @@ import re
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InputMediaPhoto, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, filters)
@@ -433,6 +433,30 @@ async def on_gym_log(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
     return True
 
 
+_MACHINE = re.compile(r"^\s*(?:тренаж[её]р|фото)\s*[:\-]?\s*(.+)$", re.I)
+
+
+async def on_machine_photo(update: Update, caption: str) -> bool:
+    """Фото с подписью «тренажер: жим платформы» — запоминаем, как выглядит тренажёр для упражнения."""
+    m = _MACHINE.match(caption)
+    if not m:
+        return False
+    query = m.group(1).strip().lower()
+    names = gym.find_exercise(query)
+    exact = [n for n in names if n == query]
+    if len(names) > 1 and not exact:
+        await reply(update, "подходит несколько упражнений, уточни подпись:\n" +
+                    "\n".join(f"• <code>тренажер: {report.esc(n)}</code>" for n in names))
+        return True
+    if not names:
+        await reply(update, f"не нашла в журнале «{report.esc(query)}». все упражнения: /progress")
+        return True
+    name = (exact or names)[0]
+    gym.set_photo(name, update.message.photo[-1].file_id)
+    await reply(update, f"📸 запомнила, как выглядит тренажёр «{report.esc(name)}». теперь он будет в /gym")
+    return True
+
+
 @owner_only
 async def cmd_gym(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan = training.suggest(gym, st.today())
@@ -440,9 +464,19 @@ async def cmd_gym(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply(update, "пока не из чего собрать план: перешли мне сообщения тренера с прошлых тренировок")
         return
     context.user_data["gym_plan"] = plan
-    await reply(update, training.format_plan(plan) +
+    # свои фото тренажёров — альбомом; у остальных кнопка с поиском картинок, пока фото нет
+    photos = [(p.name, gym.photo(p.name)) for p in plan if gym.photo(p.name)]
+    if photos:
+        await update.effective_message.reply_media_group(
+            [InputMediaPhoto(fid, caption=name) for name, fid in photos[:10]])
+    rows = [[InlineKeyboardButton(f"🔎 {p.name[:40]}", url=training.image_search_url(p.name))]
+            for p in plan if not gym.photo(p.name)]
+    rows.append([InlineKeyboardButton("✅ сделала как предложено", callback_data="gp")])
+    hint = ("\n\n🔎 как выглядит тренажёр. сфоткай его в зале и пришли с подписью "
+            "<code>тренажер: жим платформы</code>, тогда тут будет фото из твоего зала") if len(rows) > 1 else ""
+    await reply(update, training.format_plan(plan) + hint +
                 "\n\nпосле тренировки нажми ✅ или пришли, как было, в формате тренера",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ сделала как предложено", callback_data="gp")]]))
+                reply_markup=InlineKeyboardMarkup(rows))
 
 
 @owner_only
@@ -573,6 +607,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # картинка файлом приходит без сжатия Telegram — штрихкоды и мелкий текст читаются лучше
     log.info("фото%s", " файлом" if update.message.document else "")
+    if update.message.photo and await on_machine_photo(update, update.message.caption or ""):
+        return
     src = update.message.photo[-1] if update.message.photo else update.message.document
     image = bytes(await (await src.get_file()).download_as_bytearray())
     await update.effective_chat.send_action("typing")
@@ -869,6 +905,9 @@ WHATS_NEW = [
                          "а не чёрный кофе, сообщение про самочувствие не превращается в еду"),
     ("2026-10-27-progress", "📈 /progress без слов теперь показывает всё сразу: где есть прогресс, "
                             "все упражнения с максимальным весом по группам мышц, объём за тренировку и баланс подходов"),
+    ("2026-10-27-machines", "📸 чтобы не путать тренажёры: в /gym у каждого упражнения кнопка 🔎 «как выглядит». "
+                            "а лучше сфоткай тренажёр в зале и пришли с подписью «тренажер: жим платформы», "
+                            "тогда в /gym будет фото именно из твоего зала"),
 ]
 
 

@@ -73,3 +73,14 @@ def test_overview():
     assert "<i>ноги</i>" in text and "подходов по группам: ноги 7, пресс 5" in text
     assert [plural(k, "тренировка", "тренировки", "тренировок") for k in (1, 2, 5, 11, 22)] == \
         ["тренировка", "тренировки", "тренировок", "тренировок", "тренировки"]
+
+
+def test_machine_photos():
+    from training import image_search_url
+    gym = Gym(sqlite3.connect(":memory:"))
+    gym.add_session(date(2026, 10, 25), parse_session(TRAINER), "trainer")
+    assert gym.find_exercise("жим платформ") == ["жим платформы лежа"]
+    assert len(gym.find_exercise("тяга")) == 2
+    gym.set_photo("жим платформы лежа", "FILEID")
+    assert gym.photo("жим платформы лежа") == "FILEID" and gym.photo("жим вверх") is None
+    assert image_search_url("жим вверх").startswith("https://yandex.ru/images/search?text=%D1%82")
