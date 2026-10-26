@@ -48,3 +48,12 @@ def test_plan_and_progress():
         ["жим платформы лежа: 55 кг, было 52,5 💪"]
     text = format_progress(gym, "платформ")
     assert "21.10  50 кг × 15 × 3 · объём 2 250 кг" in text and "23.10  52,5 кг × 15 × 3" in text
+
+
+def test_alias():
+    gym = Gym(sqlite3.connect(":memory:"))
+    gym.add_session(date(2026, 10, 25), parse_session(TRAINER), "trainer")
+    gym.add_alias("тяга вертикальная", "вертикальная тяга со средней рукояткой")
+    gym.add_session(date(2026, 10, 28), [Exercise("тяга вертикальная", [(24.7, 15)])], "trainer")
+    assert len(gym.history("вертикальная тяга со средней рукояткой")) == 2
+    assert "тяга вертикальная" not in gym.exercises()

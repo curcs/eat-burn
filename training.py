@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS gym_sets (
     session_id INTEGER NOT NULL REFERENCES gym_sessions(id) ON DELETE CASCADE,
     exercise TEXT NOT NULL, set_no INTEGER NOT NULL, weight REAL, reps INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS gym_aliases (  -- как тренер пишет коротко -> как называем в журнале
+    alias TEXT PRIMARY KEY, name TEXT NOT NULL
+);
 """
 
 NUM = r"\d+(?:[.,]\d+)?"
@@ -84,7 +87,18 @@ class Gym:
         self.db = db
         self.db.executescript(SCHEMA)
 
+    def add_alias(self, alias: str, name: str):
+        """«тяга вертикальная» у тренера = «вертикальная тяга со средней рукояткой»: переименовываем и прошлое."""
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO gym_aliases (alias, name) VALUES (?,?)", (alias, name))
+            self.db.execute("UPDATE gym_sets SET exercise = ? WHERE exercise = ?", (name, alias))
+
+    def canonical(self, name: str) -> str:
+        row = self.db.execute("SELECT name FROM gym_aliases WHERE alias = ?", (name,)).fetchone()
+        return row[0] if row else name
+
     def add_session(self, day: date, exercises: list[Exercise], source: str) -> int:
+        exercises = [Exercise(self.canonical(e.name), e.sets) for e in exercises]
         with self.db:
             sid = self.db.execute("INSERT INTO gym_sessions (day, source) VALUES (?,?)",
                                   (day.isoformat(), source)).lastrowid
