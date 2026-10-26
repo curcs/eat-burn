@@ -16,28 +16,44 @@ SHOW_PFC = False  # бжу в ответах бота; в базе и xlsx он�
 WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
 
+def bmr(st: Storage, today: date) -> float:
+    """Базовый обмен: измеренный (InBody, по безжировой массе), если есть, иначе по формуле."""
+    measured = st.get("bmr_measured")
+    if measured:
+        return float(measured)
+    return profile_calc.bmr(st.last_weight() or float(st.get("start_weight", 60)),
+                            float(st.get("height_cm", 165)), today.year - int(st.get("birth_year", 1996)),
+                            st.get("sex", "f"))
+
+
 def goal(st: Storage, today: date | None = None) -> int:
+    """Норма: базовый обмен × активность (1,2) минус дефицит (15%), округлено до 50."""
     manual = st.get("goal_manual")
     if manual:
         return int(manual)
     today = today or date.today()
-    return profile_calc.target(
-        weight_kg=st.last_weight() or float(st.get("start_weight", 60)),
-        height_cm=float(st.get("height_cm", 165)),
-        age=today.year - int(st.get("birth_year", 1996)),
-        sex=st.get("sex", "f"),
-        activity=float(st.get("activity", 1.2)),
-        deficit=float(st.get("deficit", 0.15)))
+    tdee = bmr(st, today) * float(st.get("activity", 1.2))
+    return int(round(tdee * (1 - float(st.get("deficit", 0.15))) / 50) * 50)
+
+
+PROTEIN_G_PER_KG = 1.6  # для сохранения и роста мышц на дефиците обычно советуют 1,6–2 г/кг
+
+
+def protein_goal(st: Storage) -> int:
+    kg = st.last_weight() or float(st.get("start_weight", 60))
+    return int(round(kg * PROTEIN_G_PER_KG / 5) * 5)
+
+
+def protein_line(st: Storage, day: date) -> str:
+    return f"белок {n(st.day_totals(day)['protein'])} из {protein_goal(st)} г"
 
 
 KCAL_PER_KG = 7700
 
 
 def formula_tdee(st: Storage, today: date) -> float:
-    """Расход без тренировок по формуле: базовый обмен × 1,2."""
-    return profile_calc.bmr(st.last_weight() or float(st.get("start_weight", 60)),
-                            float(st.get("height_cm", 165)), today.year - int(st.get("birth_year", 1996)),
-                            st.get("sex", "f")) * float(st.get("activity", 1.2))
+    """Расход без тренировок: базовый обмен (измеренный или по формуле) × 1,2."""
+    return bmr(st, today) * float(st.get("activity", 1.2))
 
 
 def adaptive(st: Storage, end: date, window_days: int = 28) -> dict:
@@ -228,7 +244,7 @@ def balance_text(st: Storage, day: date, extra: float = 0) -> str:
 
 
 def left_line(st: Storage, day: date) -> str:
-    return balance_text(st, day)
+    return balance_text(st, day) + f" · {protein_line(st, day)}"
 
 
 # MET: быстрая ходьба ~5 км/ч и обычная силовая средней интенсивности (Compendium of Physical Activities)

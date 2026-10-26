@@ -316,7 +316,7 @@ def test_three_levels(st):
     at = datetime(2026, 10, 9, 12)
     maint = report.formula_tdee(st, day)            # ~1584 для профиля по умолчанию; норма 1350
     st.add_entry("quick", "рацион", 1300, "manual", when=at)
-    assert report.level(st, day)[0] == "норма" and report.left_line(st, day) == "осталось 50 ккал"
+    assert report.level(st, day)[0] == "норма" and report.left_line(st, day).startswith("осталось 50 ккал · белок")
     st.add_entry("quick", "лимонад", 149, "manual", when=at)
     assert report.level(st, day)[0] == "дефицит"
     st.add_entry("quick", "блинчики", 294, "manual", when=at)
@@ -394,3 +394,13 @@ def test_strict_dish_match(st):
     assert strict("псыж гранат") == ["стакан псыж гранат"]
     assert strict("плов") == ["плов овощной из булгура"]
     assert [d["name"] for d in st.search_dishes("банан")] == ["творог с банановым конфитюром и кешью"]  # /f гибкий
+
+
+def test_measured_bmr_and_protein(st):
+    day = date(2026, 10, 26)
+    st.set("bmr_measured", 1279)
+    st.add_weight(58.4, date(2026, 10, 21))
+    assert round(report.formula_tdee(st, day)) == 1535 and report.goal(st, day) == 1300
+    assert report.protein_goal(st) == 95
+    st.add_entry("quick", "творог", 174, "manual", 21.7, 5.3, 9.8, when=datetime(2026, 10, 26, 11))
+    assert report.left_line(st, day).endswith("белок 22 из 95 г")
