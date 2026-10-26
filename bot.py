@@ -449,10 +449,7 @@ async def cmd_gym(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = " ".join(context.args)
     if not query:
-        names = sorted(gym.exercises(), key=lambda n: (training.group_of(n), n))
-        await reply(update, "упражнения в журнале:\n" + "\n".join(f"• {report.esc(n)}" for n in names) +
-                    "\n\nнапиши, например, <code>/progress платформ</code>" if names
-                    else "журнал пуст: перешли мне сообщение тренера с тренировкой")
+        await reply(update, training.format_overview(gym))
         return
     await reply(update, training.format_progress(gym, query))
 
@@ -870,6 +867,8 @@ WHATS_NEW = [
                        "две ваши тренировки (21.10 и 25.10) уже в журнале"),
     ("2026-10-26-fixes", "🛠 починила: «банан» больше не путается с творогом, флэт уайт считается как флэт, "
                          "а не чёрный кофе, сообщение про самочувствие не превращается в еду"),
+    ("2026-10-27-progress", "📈 /progress без слов теперь показывает всё сразу: где есть прогресс, "
+                            "все упражнения с максимальным весом по группам мышц, объём за тренировку и баланс подходов"),
 ]
 
 

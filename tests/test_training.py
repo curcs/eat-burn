@@ -57,3 +57,19 @@ def test_alias():
     gym.add_session(date(2026, 10, 28), [Exercise("тяга вертикальная", [(24.7, 15)])], "trainer")
     assert len(gym.history("вертикальная тяга со средней рукояткой")) == 2
     assert "тяга вертикальная" not in gym.exercises()
+
+
+def test_overview():
+    from training import format_overview, plural
+    gym = Gym(sqlite3.connect(":memory:"))
+    gym.add_session(date(2026, 10, 21), [Exercise("сгибание ног лежа", [(20, 15)] * 2),
+                                         Exercise("пресс в тренажере", [(10, 15)] * 2)], "trainer")
+    gym.add_session(date(2026, 10, 25), [Exercise("сгибание ног лежа", [(20, 15)] * 3),
+                                         Exercise("пресс в тренажере", [(10, 15), (15, 15), (15, 15)]),
+                                         Exercise("ягодичный мост", [(35, 15)] * 2)], "trainer")
+    text = format_overview(gym)
+    assert "2 тренировки" in text and "сгибание ног лежа: объём 600 → 900 кг (+50%)" in text
+    assert "пресс в тренажере: 10 → 15 кг 💪" in text and "ягодичный мост: 35 кг × 15" in text
+    assert "<i>ноги</i>" in text and "подходов по группам: ноги 7, пресс 5" in text
+    assert [plural(k, "тренировка", "тренировки", "тренировок") for k in (1, 2, 5, 11, 22)] == \
+        ["тренировка", "тренировки", "тренировок", "тренировок", "тренировки"]

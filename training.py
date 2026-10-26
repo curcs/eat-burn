@@ -29,7 +29,7 @@ TARGET_REPS = 15                                # тренер обычно да
 
 # группа -> как узнать по названию; порядок важен: «жим платформы» — это ноги, а не жим от груди
 GROUPS = [
-    ("ноги", r"платформ|ног|присед|выпад|ягодиц|гакк|икр"),
+    ("ноги", r"платформ|ног|присед|выпад|ягодиц|ягодич|мост|гакк|икр"),
     ("спина", r"тяг|подтяг|гребл|гиперэкст"),
     ("жимы", r"жим|груд|отжим|бабочк|плеч|дельт|махи"),
     ("руки", r"бицепс|трицепс|рук"),
@@ -215,4 +215,79 @@ def format_progress(gym: Gym, query: str, limit: int = 8) -> str:
             volume = round(sum((w or 0) * r for w, r in sets))
             out.append(f"{day[8:10]}.{day[5:7]}  {format_sets(sets)}"
                        + (f" · объём {volume:,} кг".replace(",", " ") if volume else ""))
+    return "\n".join(out)
+
+
+def _best(sets: list[tuple[float | None, int]]) -> tuple[float | None, int]:
+    """Лучший подход: самый большой вес, при равенстве — больше повторов."""
+    return max(sets, key=lambda s: ((s[0] or 0), s[1]))
+
+
+def _volume(sets) -> float:
+    return sum((w or 0) * r for w, r in sets)
+
+
+def kg(x: float) -> str:
+    return f"{round(x):,}".replace(",", " ")
+
+
+def plural(k: int, one: str, few: str, many: str) -> str:
+    """1 тренировка, 2 тренировки, 5 тренировок."""
+    if k % 10 == 1 and k % 100 != 11:
+        return one
+    return few if 2 <= k % 10 <= 4 and not 12 <= k % 100 <= 14 else many
+
+
+def format_overview(gym: Gym) -> str:
+    """/progress без слов: прогресс там, где он есть, всё, что умеешь, с максимумами, и короткий анализ."""
+    sessions = gym.db.execute("SELECT id, day, source FROM gym_sessions ORDER BY day, id").fetchall()
+    if not sessions:
+        return "журнал пуст: перешли мне сообщение тренера с тренировкой"
+    names = sorted(gym.exercises(), key=lambda n: ([g for g, _ in GROUPS] + ["другое"]).index(group_of(n)))
+
+    progress, steady, skills = [], [], {}
+    for name in names:
+        hist = gym.history(name)
+        best_w, best_r = _best([s for _, sets in hist for s in sets])
+        skills.setdefault(group_of(name), []).append(
+            f"• {name}: {fmt_kg(best_w)} кг × {best_r}" + (f" · {len(hist)} раза" if len(hist) > 1 else ""))
+        if len(hist) < 2:
+            continue
+        (d0, first), (d1, last) = hist[0], hist[-1]
+        w0, w1 = _best(first)[0] or 0, _best(last)[0] or 0
+        v0, v1 = _volume(first), _volume(last)
+        if w1 > w0:
+            progress.append(f"• {name}: {fmt_kg(w0)} → {fmt_kg(w1)} кг 💪")
+        elif v1 > v0 * 1.05:
+            progress.append(f"• {name}: объём {kg(v0)} → {kg(v1)} кг (+{round((v1 / v0 - 1) * 100)}%)")
+        else:
+            steady.append(name)
+
+    vols = []
+    for sid, day, source in sessions:
+        v = gym.db.execute("SELECT COALESCE(SUM(COALESCE(weight, 0) * reps), 0) FROM gym_sets WHERE session_id = ?",
+                           (sid,)).fetchone()[0]
+        vols.append(f"{day[8:10]}.{day[5:7]} {kg(v)} кг" + (" (сама)" if source != "trainer" else ""))
+    trainer = sum(1 for s in sessions if s[2] == "trainer")
+    groups_done = {g for g in skills}
+    missing = [g for g in ("ноги", "спина", "жимы", "пресс") if g not in groups_done]
+
+    out = [f"<b>силовые</b>: {len(sessions)} {plural(len(sessions), 'тренировка', 'тренировки', 'тренировок')} "
+           f"({trainer} с тренером, {len(sessions) - trainer} сама), "
+           f"{sessions[0][1][8:10]}.{sessions[0][1][5:7]}–{sessions[-1][1][8:10]}.{sessions[-1][1][5:7]}".replace("–", "-")]
+    out.append("\n<b>📈 прогресс</b>\n" + ("\n".join(progress) if progress else
+               "пока не видно: по большинству упражнений была одна тренировка. через пару недель будет с чем сравнить"))
+    if steady:
+        out.append("держатся на месте: " + ", ".join(steady))
+    out.append("\n<b>🏋️ что умеешь и максимумы</b>")
+    for g, lines in skills.items():
+        out.append(f"<i>{g}</i>\n" + "\n".join(lines))
+    out.append("\n<b>📊 объём за тренировку</b>\n" + " · ".join(vols))
+    per_group: dict[str, int] = {}
+    for (name, cnt) in gym.db.execute("SELECT exercise, COUNT(*) FROM gym_sets GROUP BY exercise").fetchall():
+        per_group[group_of(name)] = per_group.get(group_of(name), 0) + cnt
+    out.append("подходов по группам: " + ", ".join(f"{g} {c}" for g, c in sorted(per_group.items(), key=lambda x: -x[1])))
+    if missing:
+        out.append(f"\nпока не было: {', '.join(missing)}")
+    out.append("\nподробно по упражнению: <code>/progress тяга</code>")
     return "\n".join(out)
