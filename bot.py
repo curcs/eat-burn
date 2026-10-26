@@ -855,8 +855,37 @@ async def on_keyboard_button(update: Update, context: ContextTypes.DEFAULT_TYPE,
     return False
 
 
+# что нового: после перезапуска бот присылает пункты, которых ещё не показывал. новые — в конец списка
+WHATS_NEW = [
+    ("2026-10-26-inbody", "🧬 нормы по InBody: базовый обмен теперь измеренный (1 279), норма 1 300. "
+                          "после каждой записи показываю белок одной цифрой: «белок 62 из 95 г»"),
+    ("2026-10-26-levels", "🟡 вместо одного «перебора» три уровня: ✅ в норме, 🟡 сверх нормы, но ещё в дефиците, "
+                          "🔺 больше расхода. в /today подскажу, сколько ходьбы или силовой вернёт день в норму"),
+    ("2026-10-26-weekends", "🌴 выходные не считаю: в субботу и воскресенье без напоминаний и итогов, "
+                            "в недельной средней только будни"),
+    ("2026-10-26-workouts", "📲 скрины тренировок из приложения часов: пришли скрин, запишу каждую тренировку на её дату. "
+                            "где нет калорий, оценю по скорости и времени"),
+    ("2026-10-26-gym", "🏋️ журнал силовых: перешли мне сообщение тренера, запишу тренировку и отмечу новые максимумы. "
+                       "/gym соберёт план на самостоятельную из ваших упражнений, /progress тяга покажет прогресс. "
+                       "две ваши тренировки (21.10 и 25.10) уже в журнале"),
+    ("2026-10-26-fixes", "🛠 починила: «банан» больше не путается с творогом, флэт уайт считается как флэт, "
+                         "а не чёрный кофе, сообщение про самочувствие не превращается в еду"),
+]
+
+
+async def send_whats_new(app: Application):
+    seen = set(filter(None, (st.get("whats_new_seen") or "").split(",")))
+    fresh = [(key, text) for key, text in WHATS_NEW if key not in seen]
+    if not fresh:
+        return
+    await app.bot.send_message(config.OWNER_ID, "<b>что нового</b>\n\n" + "\n\n".join(t for _, t in fresh),
+                               parse_mode=ParseMode.HTML)
+    st.set("whats_new_seen", ",".join(sorted(seen | {k for k, _ in fresh})))
+
+
 async def post_init(app: Application):
     await app.bot.set_my_commands([BotCommand(c, d) for c, d in COMMANDS])
+    await send_whats_new(app)
     if st.get("keyboard_sent") != "1":  # один раз прислать кнопки, дальше они живут в чате сами
         await app.bot.send_message(config.OWNER_ID, "добавила кнопки внизу и подсказки при вводе /", reply_markup=MAIN_KEYBOARD)
         st.set("keyboard_sent", "1")

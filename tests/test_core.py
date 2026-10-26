@@ -417,3 +417,18 @@ def test_weekends_untracked(st):
     assert "сб 24.10  🌴" in week and "в среднем 1 200 ккал за будний день" in week
     st.set("track_weekends", "1")
     assert "в среднем 1 850" in report.format_week(st, date(2026, 10, 30))
+
+
+def test_whats_new_once(st, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import bot
+    monkeypatch.setattr(bot, "st", st)
+    sent = []
+    async def send_message(chat_id, text, **kw): sent.append(text)
+    app = SimpleNamespace(bot=SimpleNamespace(send_message=send_message))
+    asyncio.run(bot.send_whats_new(app))
+    asyncio.run(bot.send_whats_new(app))      # второй раз — тишина
+    assert len(sent) == 1 and "журнал силовых" in sent[0]
+    assert all(t[:1] != t[:1].upper() or not t[:1].isalpha() for _, t in bot.WHATS_NEW)  # с маленькой буквы
+    assert not any("—" in t or "–" in t for _, t in bot.WHATS_NEW)
