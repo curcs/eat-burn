@@ -25,6 +25,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, Con
 import report
 import products
 import screens
+import training
 from llm import LLM, LLMError
 from nutrition import Draft, Nutrition, fix_generic_coffee
 from parser import parse_edit_lines, parse_quick
@@ -54,6 +55,7 @@ report.SHOW_PFC = getattr(config, "SHOW_PFC", False)
 st = Storage(str(DATA / "eatburn.db"), getattr(config, "DAY_START_HOUR", 4),
              getattr(config, "ACTIVE_BASELINE", 200))
 nutr = Nutrition(st, DATA / "usda.db")
+gym = training.Gym(st.db)
 _yandex = None
 if getattr(config, "LLM_BACKEND", "ollama") == "yandex":  # текст через YandexGPT, фото — по-прежнему локально
     _yandex = (config.YANDEX_FOLDER_ID, config.YANDEX_API_KEY, getattr(config, "YANDEX_MODEL", "yandexgpt-lite"))
@@ -88,6 +90,7 @@ HELP = """пиши, что съела или сожгла:
 /dishes: мои блюда. <code>450 цезарь жан-жак</code> запоминается, потом хватит <code>цезарь жан-жак</code>
 <code>болит голова</code>, <code>давление</code>, <code>слабость</code>: запишу самочувствие
 🎙 голосовое: расшифрую и запишу как текст
+🏋️ перешли сообщение тренера: запишу тренировку. /gym: план на самостоятельную, /progress жим: прогресс
 /patterns: что отличает дни с головной болью от обычных
 /tdee: реальный расход по весу и еде (нужно 2+ недели взвешиваний)
 /remind: напоминания про вес и еду (/remind off выключить)
@@ -181,6 +184,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if q.data.startswith(("ed:", "dl:")) or q.data == "un":
         await on_entry_callback(update, context)
+        return
+    if q.data == "gu":
+        sid = ud.pop("gym_added", None)
+        if sid:
+            gym.delete_session(sid)
+        await q.answer("отменила" if sid else "нечего отменять")
+        await q.edit_message_reply_markup(None)
+        return
+    if q.data == "gp":
+        plan = ud.pop("gym_plan", None)
+        await q.answer()
+        await q.edit_message_reply_markup(None)
+        if plan:
+            exercises = [p.as_exercise() for p in plan]
+            prs = gym.records(exercises, st.today())
+            ud["gym_added"] = gym.add_session(st.today(), exercises, "plan")
+            await reply(update, "🏋️ записала самостоятельную тренировку 💪" +
+                        ("\n\nновые максимумы:\n" + "\n".join(f"• {report.esc(p)}" for p in prs) if prs else ""),
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ отменить", callback_data="gu")]]))
         return
     if q.data == "wu":
         ids = ud.pop("workouts_added", [])
@@ -382,7 +404,57 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @owner_only
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await handle_text(update, context, update.message.text.strip())
+    text = update.message.text.strip()
+    if await on_gym_log(update, context, text):
+        return
+    await handle_text(update, context, text)
+
+
+# --- силовые: журнал из сообщений тренера, план для самостоятельной тренировки ---
+
+async def on_gym_log(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """«Жим платформы лежа 50кг*15*3 …» — тренировка. Пересланное сообщение тренера пишется на дату пересылки."""
+    exercises = training.parse_session(text)
+    if not exercises:
+        return False
+    origin = getattr(update.message, "forward_origin", None)
+    day = st.day_of(origin.date.astimezone().replace(tzinfo=None)) if origin else st.today()
+    source = "trainer" if origin else "me"
+    prs = gym.records(exercises, day)
+    sid = gym.add_session(day, exercises, source)
+    context.user_data["gym_added"] = sid
+    who = "с тренером" if source == "trainer" else ""
+    groups = sorted({training.group_of(e.name) for e in exercises})
+    text = (f"🏋️ записала тренировку {who} {day:%d.%m}: {len(exercises)} упражнений ({', '.join(groups)})"
+            + ("\n\nновые максимумы:\n" + "\n".join(f"• {report.esc(p)}" for p in prs) if prs else "")
+            + "\n\nпрогресс по упражнению: <code>/progress жим</code>, план на самостоятельную: /gym")
+    await reply(update, text.replace("  ", " "), reply_markup=InlineKeyboardMarkup(
+        [[InlineKeyboardButton("↩️ отменить", callback_data="gu")]]))
+    return True
+
+
+@owner_only
+async def cmd_gym(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    plan = training.suggest(gym, st.today())
+    if not plan:
+        await reply(update, "пока не из чего собрать план: перешли мне сообщения тренера с прошлых тренировок")
+        return
+    context.user_data["gym_plan"] = plan
+    await reply(update, training.format_plan(plan) +
+                "\n\nпосле тренировки нажми ✅ или пришли, как было, в формате тренера",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ сделала как предложено", callback_data="gp")]]))
+
+
+@owner_only
+async def cmd_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = " ".join(context.args)
+    if not query:
+        names = sorted(gym.exercises(), key=lambda n: (training.group_of(n), n))
+        await reply(update, "упражнения в журнале:\n" + "\n".join(f"• {report.esc(n)}" for n in names) +
+                    "\n\nнапиши, например, <code>/progress платформ</code>" if names
+                    else "журнал пуст: перешли мне сообщение тренера с тренировкой")
+        return
+    await reply(update, training.format_progress(gym, query))
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
@@ -759,6 +831,8 @@ COMMANDS = [
     ("remind", "напоминания"),
     ("food", "ккал на 100 г в справочник"),
     ("file", "табличка xlsx"),
+    ("gym", "план самостоятельной силовой"),
+    ("progress", "прогресс по упражнению"),
     ("help", "что я умею"),
 ]
 
@@ -1151,7 +1225,8 @@ def main():
     for name, fn in [("start", cmd_start), ("help", cmd_start), ("today", cmd_today), ("week", cmd_week),
                      ("undo", cmd_undo), ("weight", cmd_weight), ("goal", cmd_goal), ("food", cmd_food), ("dishes", cmd_dishes), ("dish_del", cmd_dish_del),
                      ("f", cmd_find), ("find", cmd_find),
-                     ("file", cmd_file), ("remind", cmd_remind), ("tdee", cmd_tdee), ("patterns", cmd_patterns)]:
+                     ("file", cmd_file), ("remind", cmd_remind), ("tdee", cmd_tdee), ("patterns", cmd_patterns),
+                     ("gym", cmd_gym), ("progress", cmd_progress)]:
         app.add_handler(CommandHandler(name, fn))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_photo))
