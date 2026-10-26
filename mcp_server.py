@@ -9,6 +9,7 @@ from pathlib import Path
 from mcp.server.mcpserver import MCPServer
 
 import report
+import training
 from storage import Storage
 
 try:
@@ -78,6 +79,37 @@ def search_dishes(query: str = "") -> list[dict]:
 def real_expenditure() -> str:
     """Реальный расход по весу и записанной еде за 4 недели против формулы — или почему пока не посчитать."""
     return plain(report.format_adaptive(st, st.today()))
+
+
+gym = training.Gym(st.db)
+
+
+@mcp.tool()
+def gym_overview() -> str:
+    """Силовые: сколько тренировок, прогресс, все упражнения с максимальным весом по группам мышц, объём, баланс."""
+    return plain(training.format_overview(gym))
+
+
+@mcp.tool()
+def gym_exercise(query: str) -> str:
+    """История одного упражнения по датам (подходы, объём). query — часть названия: «тяга», «платформ»."""
+    return plain(training.format_progress(gym, query))
+
+
+@mcp.tool()
+def gym_sessions(days: int = 60) -> list[dict]:
+    """Все силовые тренировки за N дней: дата, с тренером или сама, упражнения с подходами (вес, повторы)."""
+    since = (st.today() - timedelta(days=days)).isoformat()
+    out = []
+    for sid, day, source in st.db.execute(
+            "SELECT id, day, source FROM gym_sessions WHERE day >= ? ORDER BY day, id", (since,)).fetchall():
+        sets = st.db.execute("SELECT exercise, weight, reps FROM gym_sets WHERE session_id = ? ORDER BY rowid",
+                             (sid,)).fetchall()
+        exercises: dict[str, list] = {}
+        for name, w, r in sets:
+            exercises.setdefault(name, []).append({"weight": w, "reps": r})
+        out.append({"day": day, "source": source, "exercises": exercises})
+    return out
 
 
 if __name__ == "__main__":
