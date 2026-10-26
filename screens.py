@@ -9,7 +9,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageStat
 
 from products import Product, parse_label
 
@@ -40,9 +40,86 @@ class Dish:
 
 @dataclass
 class Screen:
-    kind: str  # "card", "menu" (бумажное меню на день), "list" или "label" (этикетка «пищевая ценность»)
+    kind: str  # "card", "menu" (бумажное меню на день), "list", "label" (этикетка) или "workouts"
     dishes: list[Dish]
     label: Product | None = None
+    workouts: list["Workout"] | None = None
+
+
+# тип тренировки на скрине -> (как называем, MET по умолчанию). MET ходьбы уточняется по скорости
+WORKOUT_KINDS = [
+    (r"treadmill|беговая дорожка|дорожк", "дорожка", None),
+    (r"walk|ходьб|прогулк", "ходьба", None),
+    (r"run|бег\b|бег ", "бег", 8.0),
+    (r"strength|силов", "силовая", 5.0),
+    (r"cycl|bike|велосипед|вело", "велосипед", 6.0),
+    (r"yoga|йога", "йога", 2.5),
+    (r"swim|плаван", "плавание", 6.0),
+    (r"elliptical|эллипс", "эллипс", 5.0),
+    (r"hiit|интервал", "интервальная", 8.0),
+    (r"stretch|растяжк", "растяжка", 2.3),
+]
+
+
+@dataclass
+class Workout:
+    kind: str
+    minutes: float
+    km: float | None = None
+    kcal: float | None = None      # со скрина, если есть
+    day: tuple[int, int] | None = None  # (месяц, число)
+
+    def walking_met(self) -> float:
+        """MET ходьбы по скорости (Compendium): медленно 2,8 · обычно 3,5 · быстро 4,3 · очень быстро 5."""
+        speed = self.km / (self.minutes / 60) if self.km and self.minutes else 4
+        return 2.8 if speed < 3.2 else 3.5 if speed < 4.8 else 4.3 if speed < 5.6 else 5.0 if speed < 7 else 8.0
+
+
+_DIST = re.compile(r"(\d+(?:[.,]\d+)?)\s*(km|км|m|м)\b", re.I)
+# длительность: «9m 55s», «1h 2m 35s», «1h 5m», «45 min»
+_DURATIONS = [re.compile(r"(?:(\d+)\s*h\s*)?(?:(\d+)\s*m(?:in)?\s*)?(\d+)\s*s\b", re.I),
+              re.compile(r"(\d+)\s*h\s*(?:(\d+)\s*m(?:in)?)?()", re.I),
+              re.compile(r"()(\d+)\s*min()\b", re.I)]
+
+
+def parse_duration(text: str) -> tuple[float, str]:
+    """(минуты, текст без длительности)."""
+    for rx in _DURATIONS:
+        m = rx.search(text)
+        if m and any(m.groups()):
+            h, mi, s = (int(g) if g else 0 for g in m.groups())
+            return h * 60 + mi + s / 60, text[:m.start()] + " " + text[m.end():]
+    return 0.0, text
+_KCAL = re.compile(r"(\d+)\s*(?:kcal|ккал)", re.I)
+_DATE = re.compile(r"\b(\d{1,2})/(\d{1,2})\b")
+
+
+def parse_workouts(text: str) -> list[Workout]:
+    """Список тренировок из приложения часов: строка с типом, рядом строка «2,68 km, 54m 16s» или «315 kcal | 1h 2m»."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    out = []
+    for i, line in enumerate(lines):
+        kind = next((name for pattern, name, _ in WORKOUT_KINDS if re.search(pattern, line, re.I)), None)
+        if not kind:
+            continue
+        near = lines[i:i + 3]
+        metrics = next((l for l in near[1:] if re.search(r"\d+\s*(h|m|s|km|kcal|ккал|км)\b", l, re.I)), None)
+        if not metrics:
+            continue
+        minutes, rest = parse_duration(metrics)
+        dist = _DIST.search(rest)  # дистанцию ищем там, где уже нет длительности: «586 m, 9m 55s»
+        km = None
+        if dist:
+            v = float(dist.group(1).replace(",", "."))
+            km = v if dist.group(2).lower() in ("km", "км") else v / 1000
+        kcal = _KCAL.search(metrics)
+        date = next((m for l in near for m in [_DATE.search(l)] if m), None)
+        out.append(Workout(kind, minutes, km, float(kcal.group(1)) if kcal else None,
+                           (int(date.group(1)), int(date.group(2))) if date else None))
+    for k, w in enumerate(out):  # дата не прочиталась — берём у соседней карточки
+        if w.day is None:
+            w.day = next((o.day for o in out[k::-1] + out[k:] if o.day), None)
+    return [w for w in out if w.minutes > 0 or w.kcal]
 
 
 def ocr(img: Image.Image) -> str:
@@ -57,7 +134,12 @@ def read_screenshot(image: bytes) -> Screen | None:
     """None — это не скрин рациона (наверное, фото тарелки)."""
     rgb = Image.open(io.BytesIO(image)).convert("RGB")
     img = rgb.convert("L")
+    if ImageStat.Stat(img).mean[0] < 90:  # тёмная тема (приложения часов): инвертируем, иначе tesseract не видит текст
+        img = ImageOps.invert(img).resize((img.width * 2, img.height * 2), Image.LANCZOS)
     text = ocr(img)
+    workouts = parse_workouts(text)
+    if workouts:
+        return Screen("workouts", [], workouts=workouts)
     card = parse_card(text)
     if card:
         return Screen("card", [card])

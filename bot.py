@@ -59,6 +59,8 @@ if getattr(config, "LLM_BACKEND", "ollama") == "yandex":  # текст чере�
     _yandex = (config.YANDEX_FOLDER_ID, config.YANDEX_API_KEY, getattr(config, "YANDEX_MODEL", "yandexgpt-lite"))
 llm = LLM(getattr(config, "TEXT_MODEL", "qwen2.5:7b"), getattr(config, "VISION_MODEL", "gemma3:4b"), yandex=_yandex)
 
+if st.get("track_weekends") is None:
+    st.set("track_weekends", "1" if getattr(config, "TRACK_WEEKENDS", True) else "0")
 for key in ("height_cm", "birth_year", "start_weight", "sex"):
     if st.get(key) is None and hasattr(config, key.upper()):
         st.set(key, getattr(config, key.upper()))
@@ -179,6 +181,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if q.data.startswith(("ed:", "dl:")) or q.data == "un":
         await on_entry_callback(update, context)
+        return
+    if q.data == "wu":
+        ids = ud.pop("workouts_added", [])
+        for i in ids:
+            st.delete_entry(i)
+        await q.answer("отменила" if ids else "нечего отменять")
+        await q.edit_message_reply_markup(None)
         return
     if q.data.startswith("sy:"):
         await on_symptom_callback(update, context)
@@ -515,6 +524,9 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:  # нет tesseract, битая картинка — просто считаем, что это фото еды
         log.warning("ocr: %s", e)
         screen = None
+    if screen and screen.kind == "workouts":
+        await on_workouts(update, context, screen.workouts)
+        return
     if screen and screen.kind == "label":
         prod = screen.label
         m = re.match(r"^\s*(.*?)\s*(\d+(?:[.,]\d+)?)?\s*(?:г|гр|мл|g|ml)?\s*$", caption)
@@ -528,6 +540,57 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await on_list(update, context, screen.dishes, menu=screen.kind == "menu")
     else:
         await parse_and_show(update, context, llm.parse_photo, image, update.message.caption or "")
+
+
+# --- тренировки со скрина приложения часов ---
+
+WORKOUT_MET = {"бег": 8.0, "силовая": 5.0, "велосипед": 6.0, "йога": 2.5, "плавание": 6.0,
+               "эллипс": 5.0, "интервальная": 8.0, "растяжка": 2.3}
+
+
+def workout_kcal(w: screens.Workout) -> tuple[float, bool]:
+    """(ккал, оценка ли это). Со скрина — как есть; нет — по MET сверх покоя, как в подсказке «до нормы»."""
+    if w.kcal:
+        return w.kcal, False
+    met = w.walking_met() if w.kind in ("ходьба", "дорожка") else WORKOUT_MET.get(w.kind, 4.0)
+    kg = st.last_weight() or float(st.get("start_weight", 60))
+    return round((met - 1) * 3.5 * kg / 200 * w.minutes), True
+
+
+def workout_day(w: screens.Workout) -> datetime:
+    now = datetime.now()
+    if not w.day:
+        return now
+    month, dd = w.day
+    when = datetime(now.year, month, dd, 12)
+    return when.replace(year=now.year - 1) if when > now + timedelta(days=1) else when  # «12/30» в январе
+
+
+async def on_workouts(update: Update, context: ContextTypes.DEFAULT_TYPE, workouts: list[screens.Workout]):
+    """Записываем сразу на дату тренировки, с кнопкой «отменить». Тот же скрин второй раз не дублирует."""
+    added, lines, skipped = [], [], 0
+    for w in workouts:
+        kcal, estimated = workout_kcal(w)
+        when = workout_day(w)
+        descr = f"{w.kind} {round(w.minutes)} мин" + (f", {w.km:.2f} км".replace(".", ",") if w.km else "")
+        day = st.day_of(when)
+        if any(e["kind"] == "workout" and e["descr"] == descr for e in st.entries(day)):
+            skipped += 1
+            continue
+        added.append(st.add_entry("workout", descr, kcal, "screen", when=when))
+        mark = " (оценка)" if estimated else ""
+        lines.append(f"• {when:%d.%m} {report.esc(descr)} · −{report.n(kcal)}{mark}")
+    if not added:
+        await reply(update, "эти тренировки уже записаны 👌")
+        return
+    context.user_data["workouts_added"] = added
+    days = {st.day_of(workout_day(w)) for w in workouts}
+    weekend = " в выходные я норму не считаю, записала для истории 🌴" if all(d.weekday() >= 5 for d in days) else ""
+    note = f"\n(уже было записано: {skipped})" if skipped else ""
+    await reply(update, "💪 записала тренировки:\n" + "\n".join(lines) + note +
+                "\n\nоценка — по скорости и времени, сверх покоя." + weekend +
+                f"\n<b>{report.left_line(st, st.today())}</b>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ отменить", callback_data="wu")]]))
 
 
 # --- продукты в упаковке: штрихкод или этикетка ---
@@ -1026,6 +1089,8 @@ async def job_weight(context: ContextTypes.DEFAULT_TYPE):
 async def job_nudge(context: ContextTypes.DEFAULT_TYPE):
     """Напоминаем, только если давно ничего не записывала — когда всё ведёшь, бот молчит."""
     last = st.last_entry_time()
+    if not report.tracked(st, st.today()):  # выходные не ведём — не дёргаем
+        return
     if st.get("remind", "on") != "on" or (last and datetime.now() - last < timedelta(hours=NUDGE_GAP_H)):
         return
     since = f"с {last:%H:%M} " if last and last.date() == datetime.now().date() else "сегодня "
@@ -1055,6 +1120,8 @@ async def on_weight_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, te
 
 async def job_daily(context: ContextTypes.DEFAULT_TYPE):
     day = st.today()
+    if not report.tracked(st, day):  # выходные: без итога и без вопроса о самочувствии
+        return
     if st.day_totals(day)["n"]:
         await context.bot.send_message(config.OWNER_ID, report.format_day(st, day, "итог дня"),
                                        parse_mode=ParseMode.HTML)

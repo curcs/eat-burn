@@ -404,3 +404,16 @@ def test_measured_bmr_and_protein(st):
     assert report.protein_goal(st) == 95
     st.add_entry("quick", "творог", 174, "manual", 21.7, 5.3, 9.8, when=datetime(2026, 10, 26, 11))
     assert report.left_line(st, day).endswith("белок 22 из 95 г")
+
+
+def test_weekends_untracked(st):
+    st.set("track_weekends", "0")
+    sat, mon = date(2026, 10, 24), date(2026, 10, 26)
+    st.add_entry("quick", "пицца", 2500, "manual", when=datetime(2026, 10, 24, 14))
+    st.add_entry("quick", "рацион", 1200, "manual", when=datetime(2026, 10, 26, 14))
+    assert report.left_line(st, sat).startswith("выходной")
+    assert report.left_line(st, mon).startswith("осталось")
+    week = report.format_week(st, date(2026, 10, 30))
+    assert "сб 24.10  🌴" in week and "в среднем 1 200 ккал за будний день" in week
+    st.set("track_weekends", "1")
+    assert "в среднем 1 850" in report.format_week(st, date(2026, 10, 30))

@@ -113,3 +113,28 @@ def test_eaten_on(tmp_path):
     st = Storage(str(tmp_path / "e.db"))
     st.add_entry("quick", "живой творог с запеченными фруктами", 197, "screen", when=datetime(2026, 10, 9, 11))
     assert "живой творог с запеченными фруктами" in st.eaten_on(date(2026, 10, 9))
+
+
+WORKOUTS = """Oct 2026
+Rk Walking
+10/25 >
+586 m, 9m 55s
+& Treadmill
+10/25 >
+610 m, 10m 53s
+ae Strength
+10/25 >
+315 kcal | 1h 2m 35s
+Kk Walking eta
+2,68 km, 54m 16s
+"""
+
+
+def test_workouts():
+    from screens import parse_workouts
+    ws = parse_workouts(WORKOUTS)
+    assert [(w.kind, round(w.minutes), w.km, w.kcal, w.day) for w in ws] == [
+        ("ходьба", 10, 0.586, None, (10, 25)), ("дорожка", 11, 0.61, None, (10, 25)),
+        ("силовая", 63, None, 315, (10, 25)), ("ходьба", 54, 2.68, None, (10, 25))]  # дата у соседа
+    assert ws[3].walking_met() == 2.8 and ws[0].walking_met() == 3.5
+    assert parse_workouts(CARD) == [] and parse_workouts(MENU) == []

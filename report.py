@@ -51,6 +51,11 @@ def protein_line(st: Storage, day: date) -> str:
 KCAL_PER_KG = 7700
 
 
+def tracked(st: Storage, day: date) -> bool:
+    """Выходные можно не считать (чит-дни): тогда бот их не оценивает и не берёт в средние."""
+    return st.get("track_weekends", "1") == "1" or day.weekday() < 5
+
+
 def formula_tdee(st: Storage, today: date) -> float:
     """Расход без тренировок: базовый обмен (измеренный или по формуле) × 1,2."""
     return bmr(st, today) * float(st.get("activity", 1.2))
@@ -69,9 +74,10 @@ def adaptive(st: Storage, end: date, window_days: int = 28) -> dict:
                                     f"взвешиваний за 4 недели: {len(ws)})"}
     span = [ws[0][0] + timedelta(days=k) for k in range((ws[-1][0] - ws[0][0]).days + 1)]
     totals = [st.day_totals(d) for d in span]
-    logged = [t for t in totals if t["eaten"] > 0]
-    if len(logged) < 0.7 * len(span):
-        return {"ok": False, "why": f"еда записана в {len(logged)} из {len(span)} дней, нужно хотя бы 70%"}
+    counted = [t for d, t in zip(span, totals) if tracked(st, d)]
+    logged = [t for t in counted if t["eaten"] > 0]
+    if len(logged) < 0.7 * len(counted):
+        return {"ok": False, "why": f"еда записана в {len(logged)} из {len(counted)} дней, нужно хотя бы 70%"}
     # наклон веса методом наименьших квадратов: взвешиваний может быть несколько, берём тренд, а не две точки
     xs = [(d - ws[0][0]).days for d, _ in ws]
     mx, my = sum(xs) / len(xs), sum(k for _, k in ws) / len(ws)
@@ -90,6 +96,8 @@ def format_adaptive(st: Storage, end: date) -> str:
     a = adaptive(st, end)
     if not a["ok"]:
         return f"реальный расход пока не посчитать: {a['why']}"
+    weekends = ("\n\n🌴 выходные не записываются: если в них ешь больше, чем в будни, "
+                "реальный расход тут завышен. ориентируйся больше на вес" if st.get("track_weekends", "1") != "1" else "")
     diff = a["real"] - a["expected"]
     verdict = ("формула и активность почти совпадают с реальностью" if abs(diff) < 100 else
                f"по факту тратишь на {n(abs(diff))} ккал {'больше' if diff > 0 else 'меньше'}, чем по формуле с активностью")
@@ -98,7 +106,7 @@ def format_adaptive(st: Storage, end: date) -> str:
             f"→ тратишь около <b>{n(a['real'])}</b> ккал в день\n"
             f"по формуле с активностью {n(a['expected'])}: {verdict}\n\n"
             f"норма с тем же дефицитом была бы {n(a['suggested'])} (сейчас {n(goal(st, end))}). "
-            "поставить: <code>/goal adapt</code>")
+            "поставить: <code>/goal adapt</code>" + weekends)
 
 
 # чай и кофе идут в воду частично: (как называется, доля воды, объём чашки, если в записи его нет)
@@ -244,6 +252,8 @@ def balance_text(st: Storage, day: date, extra: float = 0) -> str:
 
 
 def left_line(st: Storage, day: date) -> str:
+    if not tracked(st, day):
+        return "выходной 🌴 норму сегодня не считаю"
     return balance_text(st, day) + f" · {protein_line(st, day)}"
 
 
@@ -265,7 +275,7 @@ def hm(minutes: int) -> str:
 def activity_hint(st: Storage, day: date) -> str:
     """Справка, сколько движения вернёт день в норму. Не задание: проще ровный следующий день."""
     kind, over_goal, _ = level(st, day)
-    if kind == "норма":
+    if kind == "норма" or not tracked(st, day):
         return ""
     kg = st.last_weight() or float(st.get("start_weight", 60))
     options = " или ".join(f"~{hm(minutes_for(over_goal, met, kg))} {name}" for name, met in ACTIVITIES)
@@ -326,6 +336,9 @@ def format_week(st: Storage, end: date) -> str:
     for k in range(7):
         d = start + timedelta(days=k)
         t = st.day_totals(d)
+        if not tracked(st, d):
+            lines.append(f"{WEEKDAYS[d.weekday()]} {d:%d.%m}  🌴")
+            continue
         if not t["n"]:
             lines.append(f"{WEEKDAYS[d.weekday()]} {d:%d.%m}  ·")
             continue
@@ -336,10 +349,11 @@ def format_week(st: Storage, end: date) -> str:
         if t["eaten"]:
             eaten_days.append(t["eaten"])
     text = (f"<b>неделя {start:%d.%m}-{end:%d.%m}</b>\n<pre>" + "\n".join(lines) + "</pre>"
-            "\n✅ в норме · 🟡 сверх нормы, но в дефиците · 🔺 больше расхода")
+            "\n✅ в норме · 🟡 сверх нормы, но в дефиците · 🔺 больше расхода"
+            + (" · 🌴 выходной, не считаю" if st.get("track_weekends", "1") != "1" else ""))
     if eaten_days:
         avg = sum(eaten_days) / len(eaten_days)
-        text += f"\nв среднем {n(avg)} ккал в день при норме {n(goal(st, end))}"
+        text += f"\nв среднем {n(avg)} ккал за {'будний ' if st.get('track_weekends', '1') != '1' else ''}день при норме {n(goal(st, end))}"
         if avg < LOW_AVG_KCAL:
             text += (f"\n\n💛 средняя ниже {LOW_AVG_KCAL}, это уже жёсткий дефицит. "
                      "если так неделями, стоит добавить немного еды")
@@ -367,7 +381,7 @@ def week_chart(st: Storage, end: date) -> bytes:
 
     days = [end - timedelta(days=6 - k) for k in range(7)]
     totals = [st.day_totals(d) for d in days]
-    eaten = [t["eaten"] for t in totals]
+    eaten = [t["eaten"] if tracked(st, d) else 0 for d, t in zip(days, totals)]
     allowed = [goal(st, d) + t["burned"] for d, t in zip(days, totals)]
     weights = [w for w in st.weights() if days[0] - timedelta(days=21) <= date.fromisoformat(w["day"]) <= end]
 
